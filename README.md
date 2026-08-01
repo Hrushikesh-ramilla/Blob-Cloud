@@ -1,9 +1,4 @@
-...AWS Free Tier limits (or Cloudflare R2). 
-
-Here is the complete, production-ready `README.md` file for your GitHub repository. It is written from your perspective as the engineer, emphasizing design trade-offs, architecture, and system resilience.
-
----
-
+ 
 # Blob-Cloud
 
 [![Go Version](https://img.shields.io/github/go-mod/go-version/yourusername/blob-cloud?filename=backend%2Fgo.mod)](https://golang.org)
