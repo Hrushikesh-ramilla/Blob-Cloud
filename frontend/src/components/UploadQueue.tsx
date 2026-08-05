@@ -20,7 +20,7 @@ export function UploadQueue() {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-50 w-80 animate-fade-in font-sans select-none"
+      className="fixed top-20 right-6 z-50 w-80 animate-fade-in font-sans select-none"
       role="region"
       aria-label="Upload queue"
     >
@@ -139,7 +139,7 @@ function StatusIcon({ status }: { status: UploadStatus }) {
         strokeWidth="2.5"
         strokeLinecap="round"
         strokeLinejoin="round"
-        className="mt-0.5 shrink-0 text-emerald-400"
+        className="mt-0.5 shrink-0 text-zinc-400"
         aria-hidden="true"
       >
         <polyline points="20,6 9,17 4,12" />

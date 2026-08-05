@@ -95,7 +95,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {/* Viewport: fixed bottom-right stack, pointer-events none on the
           container but each toast re-enables interaction. */}
       <div
-        className="pointer-events-none fixed bottom-6 right-6 z-[60] flex w-full max-w-sm flex-col gap-2"
+        className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 z-[60] flex w-full max-w-sm flex-col gap-2"
         aria-live="polite"
         aria-atomic="false"
       >
@@ -120,15 +120,15 @@ function ToastCard({ toast, onDismiss }: ToastCardProps) {
     <div
       role="status"
       className={cn(
-        'pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-xl backdrop-blur-sm',
+        'pointer-events-auto flex items-start gap-3 rounded border border-arch-border bg-arch-950 px-4 py-3 shadow-sharp text-zinc-100',
         'animate-[fade-in_0.2s_ease-out]',
-        toast.variant === 'success'
-          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+        toast.variant === 'success' || toast.variant === 'info'
+          ? 'border-zinc-700 bg-zinc-900 text-zinc-100'
           : toast.variant === 'warning'
             ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
             : toast.variant === 'error'
               ? 'border-rose-500/40 bg-rose-500/10 text-rose-200'
-              : 'border-blue-500/40 bg-blue-500/10 text-blue-200',
+              : 'border-zinc-700 bg-zinc-900 text-zinc-100',
       )}
     >
       <span className="mt-0.5 flex-shrink-0 opacity-90">{toast.icon ?? defaultIcon}</span>

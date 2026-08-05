@@ -107,7 +107,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               onClick={() => setActiveTab('storage')}
               className={`pb-2.5 px-4 font-medium transition-colors border-b-2 -mb-px ${
                 activeTab === 'storage'
-                  ? 'border-violet-600 text-violet-600 dark:border-violet-400 dark:text-violet-400 font-semibold'
+                  ? 'border-amber-500 text-amber-600 dark:border-amber-400 dark:text-amber-400 font-semibold'
                   : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
@@ -118,7 +118,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               onClick={() => setActiveTab('account')}
               className={`pb-2.5 px-4 font-medium transition-colors border-b-2 -mb-px ${
                 activeTab === 'account'
-                  ? 'border-violet-600 text-violet-600 dark:border-violet-400 dark:text-violet-400 font-semibold'
+                  ? 'border-amber-500 text-amber-600 dark:border-amber-400 dark:text-amber-400 font-semibold'
                   : 'border-transparent text-slate-500 hover:text-slate-900 dark:text-zinc-400 dark:hover:text-zinc-200'
               }`}
             >
@@ -143,24 +143,24 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   </div>
 
                   <div className="flex h-3.5 w-full overflow-hidden rounded-full bg-slate-200 p-0.5 dark:bg-zinc-800">
-                    <div className="h-full rounded-l-full bg-violet-500 transition-all" style={{ width: `${imagesPct}%` }} title="Images" />
-                    <div className="h-full bg-blue-500 transition-all" style={{ width: `${docsPct}%` }} title="Documents" />
-                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${mediaPct}%` }} title="Media" />
+                    <div className="h-full rounded-l-full bg-zinc-600 transition-all" style={{ width: `${imagesPct}%` }} title="Images" />
+                    <div className="h-full bg-zinc-500 transition-all" style={{ width: `${docsPct}%` }} title="Documents" />
+                    <div className="h-full bg-slate-400 transition-all" style={{ width: `${mediaPct}%` }} title="Media" />
                     <div className="h-full bg-amber-500 transition-all" style={{ width: `${codePct}%` }} title="Code" />
-                    <div className="h-full rounded-r-full bg-slate-400 transition-all" style={{ width: `${otherPct}%` }} title="Other" />
+                    <div className="h-full rounded-r-full bg-zinc-700 transition-all" style={{ width: `${otherPct}%` }} title="Other" />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 pt-2 text-xs text-slate-600 dark:text-zinc-400 sm:grid-cols-3">
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-violet-500" />
+                      <span className="h-2.5 w-2.5 rounded-full bg-zinc-600" />
                       <span>Images ({formatFileSize(images)})</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                      <span className="h-2.5 w-2.5 rounded-full bg-zinc-500" />
                       <span>Documents ({formatFileSize(docs)})</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                      <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
                       <span>Media ({formatFileSize(media)})</span>
                     </div>
                     <div className="flex items-center gap-1.5">
@@ -168,7 +168,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                       <span>Code ({formatFileSize(code)})</span>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      <span className="h-2.5 w-2.5 rounded-full bg-slate-400 dark:bg-zinc-400" />
+                      <span className="h-2.5 w-2.5 rounded-full bg-zinc-700 dark:bg-zinc-400" />
                       <span>Other ({formatFileSize(other)})</span>
                     </div>
                   </div>
@@ -187,7 +187,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 </h3>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex items-center justify-between dark:border-zinc-800 dark:bg-zinc-900/60">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-600 font-bold text-white text-sm">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-zinc-700 bg-zinc-800 font-bold text-zinc-100 text-sm">
                       {user?.user_id ? 'U' : 'A'}
                     </div>
                     <div>
