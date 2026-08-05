@@ -164,6 +164,48 @@ func (s *S3Storage) GetObject(ctx context.Context, key string) (io.ReadCloser, e
 	return out.Body, nil
 }
 
+// GetObjectRange opens the stored S3 object starting at offset for up to length bytes.
+func (s *S3Storage) GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	var rangeHeader string
+	if length >= 0 {
+		rangeHeader = fmt.Sprintf("bytes=%d-%d", offset, offset+length-1)
+	} else {
+		rangeHeader = fmt.Sprintf("bytes=%d-", offset)
+	}
+	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(rangeHeader),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3 get object range %q: %w", key, err)
+	}
+	return out.Body, nil
+}
+
+// HeadObject fetches object metadata directly from S3.
+func (s *S3Storage) HeadObject(ctx context.Context, key string) (*domain.ObjectMetadata, error) {
+	out, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("s3 head object %q: %w", key, err)
+	}
+	var contentLength int64
+	if out.ContentLength != nil {
+		contentLength = *out.ContentLength
+	}
+	var etag string
+	if out.ETag != nil {
+		etag = strings.Trim(*out.ETag, "\"")
+	}
+	return &domain.ObjectMetadata{
+		ContentLength: contentLength,
+		ETag:          etag,
+	}, nil
+}
+
 // DeleteObject removes an object from S3. Missing objects are not an error
 // (idempotent, matching S3 semantics).
 func (s *S3Storage) DeleteObject(ctx context.Context, key string) error {

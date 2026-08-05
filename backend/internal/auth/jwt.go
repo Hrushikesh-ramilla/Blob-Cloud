@@ -10,28 +10,69 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// TokenLifetime is how long an issued token remains valid. Kept short because
-// clients obtain a fresh one per session; stolen tokens stop working quickly.
+// TokenLifetime is how long an issued access token remains valid. Kept short
+// because clients obtain a fresh one via refresh tokens; stolen tokens stop
+// working quickly.
 const TokenLifetime = 24 * time.Hour
 
+// RefreshTokenLifetime is how long a refresh token remains valid. Refresh tokens
+// are long-lived so users stay signed in across sessions without re-entering
+// credentials.
+const RefreshTokenLifetime = 7 * 24 * time.Hour
+
 // Claims is the custom JWT claims body. UserID is the subject; the standard
-// RegisteredClaims supply expiry/issued-at for automatic validation.
+// RegisteredClaims supply expiry/issued-at for automatic validation. IsRefresh
+// distinguishes refresh tokens from access tokens so the Bearer middleware can
+// reject refresh tokens used as access tokens.
 type Claims struct {
-	UserID string `json:"user_id"`
+	UserID    string `json:"user_id"`
+	SessionID string `json:"session_id,omitempty"`
+	IsRefresh bool   `json:"is_refresh"`
 	jwt.RegisteredClaims
 }
 
-// CreateToken mints a signed JWT for the given user using HMAC-SHA256. The
-// secret must be at least 32 bytes; call VerifySecret.
+// CreateToken mints a signed access-token JWT for the given user using HMAC-SHA256.
 func CreateToken(secret, userID string) (string, error) {
+	return CreateTokenWithSession(secret, userID, "")
+}
+
+// CreateTokenWithSession mints a signed access-token JWT bound to a specific session_id.
+func CreateTokenWithSession(secret, userID, sessionID string) (string, error) {
 	if err := VerifySecret(secret); err != nil {
 		return "", err
 	}
 	now := time.Now()
 	claims := Claims{
-		UserID: userID,
+		UserID:    userID,
+		SessionID: sessionID,
+		IsRefresh: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(now.Add(TokenLifetime)),
+			IssuedAt:  jwt.NewNumericDate(now),
+			Subject:   userID,
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(secret))
+}
+
+// CreateRefreshToken mints a signed refresh-token JWT for the given user.
+func CreateRefreshToken(secret, userID string) (string, error) {
+	return CreateRefreshTokenWithSession(secret, userID, "")
+}
+
+// CreateRefreshTokenWithSession mints a signed refresh-token JWT bound to a specific session_id.
+func CreateRefreshTokenWithSession(secret, userID, sessionID string) (string, error) {
+	if err := VerifySecret(secret); err != nil {
+		return "", err
+	}
+	now := time.Now()
+	claims := Claims{
+		UserID:    userID,
+		SessionID: sessionID,
+		IsRefresh: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(now.Add(RefreshTokenLifetime)),
 			IssuedAt:  jwt.NewNumericDate(now),
 			Subject:   userID,
 		},

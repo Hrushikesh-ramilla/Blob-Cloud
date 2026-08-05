@@ -35,6 +35,7 @@ type UploadSession struct {
 type SessionBlock struct {
 	SessionID      string `json:"session_id"`
 	BlockHash      string `json:"block_hash"`
+	BlockMD5       string `json:"block_md5"`
 	SequenceNumber int    `json:"sequence_number"`
 	SizeBytes      int32  `json:"size_bytes"`
 	IsUploaded     bool   `json:"is_uploaded"`

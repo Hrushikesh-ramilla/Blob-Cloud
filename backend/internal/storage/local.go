@@ -9,6 +9,8 @@ package storage
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -111,6 +113,53 @@ func (s *LocalStore) GetObject(_ context.Context, key string) (io.ReadCloser, er
 		return nil, fmt.Errorf("open object: %w", err)
 	}
 	return f, nil
+}
+
+// GetObjectRange opens the local file starting at offset for up to length bytes.
+func (s *LocalStore) GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	path := s.keyToPath(key)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("object %q: %w", key, err)
+		}
+		return nil, fmt.Errorf("open object: %w", err)
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("seek local object to %d: %w", offset, err)
+	}
+	if length >= 0 {
+		return &struct {
+			io.Reader
+			io.Closer
+		}{io.LimitReader(f, length), f}, nil
+	}
+	return f, nil
+}
+
+// HeadObject returns object size and MD5 hash for local storage.
+func (s *LocalStore) HeadObject(_ context.Context, key string) (*domain.ObjectMetadata, error) {
+	path := s.keyToPath(key)
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("object %q: %w", key, err)
+		}
+		return nil, fmt.Errorf("stat object: %w", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read object for md5: %w", err)
+	}
+	hash := md5.Sum(data)
+	etag := hex.EncodeToString(hash[:])
+
+	return &domain.ObjectMetadata{
+		ContentLength: info.Size(),
+		ETag:          etag,
+	}, nil
 }
 
 // DeleteObject removes the object identified by key. Missing objects are

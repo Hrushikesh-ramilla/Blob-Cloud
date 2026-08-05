@@ -17,7 +17,7 @@ import type {
   InitiateResponse,
   CompleteResponse,
 } from '../types/file'
-import type { HashWorkerResponse } from '../workers/hash.worker'
+import type { ChunkHashResult, HashWorkerResponse } from '../workers/hash.worker'
 
 /** Custom event dispatched on window when an upload finishes, so the file
  *  listing in Dashboard can refresh. */
@@ -36,6 +36,7 @@ const COMPLETING_BAND_END = 99 // completing: 95 → 99%
 export interface UploadContextValue {
   jobs: UploadJob[]
   uploadFile: (file: File, parentId: string | null) => void
+  uploadFolder: (files: File[], parentId: string | null) => Promise<void>
   clearCompleted: () => void
 }
 
@@ -50,7 +51,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth()
   const [jobs, setJobs] = useState<UploadJob[]>([])
 
-  // Keep a ref to jobs so async closuresures read the latest snapshot without
+  // Keep a ref to jobs so async closures read the latest snapshot without
   // re-subscribing on every state change.
   const jobsRef = useRef<UploadJob[]>([])
   jobsRef.current = jobs
@@ -90,8 +91,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         { type: 'module' },
       )
 
-      // Per-chunk uploaded-byte tracker for aggregate progress.
-      const chunkBytesUploaded = new Map<string, number>()
+      // Per-chunk uploaded-byte tracker for aggregate progress (indexed by sequence_number).
+      const chunkBytesUploaded = new Map<number, number>()
 
       /** Mark a job as failed and tear down the worker. */
       const failJob = (message: string) => {
@@ -99,12 +100,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         worker.terminate()
       }
 
+      let activeSessionId: string | null = null
+
       try {
-        /* ---- 1. HASHING ---- */
-        const chunks = await new Promise<{
-          sha256: string
-          size_bytes: number
-        }[]>((resolve, reject) => {
+        /* ---- 1. HASHING (SHA-256 + MD5 via Bounded Concurrency Worker) ---- */
+        const chunks = await new Promise<ChunkHashResult[]>((resolve, reject) => {
           worker.onmessage = (e: MessageEvent<HashWorkerResponse>) => {
             const msg = e.data
             if (msg.type === 'progress') {
@@ -131,7 +131,11 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           parent_id: parentId,
           user_id: user.user_id,
           total_size: file.size,
-          chunks: chunks.map((c) => ({ sha256: c.sha256, size_bytes: c.size_bytes })),
+          chunks: chunks.map((c) => ({
+            sha256: c.sha256,
+            block_md5: c.md5,
+            size_bytes: c.size_bytes,
+          })),
         }
 
         const initiateRes = await apiClient.post<InitiateResponse>(
@@ -139,15 +143,49 @@ export function UploadProvider({ children }: { children: ReactNode }) {
           initiateBody,
         )
         const session = initiateRes.data
+        activeSessionId = session.session_id
         // eslint-disable-next-line no-console
         console.info('[upload] session initiated:', session.session_id)
+
+        /* ---- TOCTOU State Recording ---- */
+        const toctouKey = `upload_toctou_${session.session_id}`
+        localStorage.setItem(
+          toctouKey,
+          JSON.stringify({
+            name: file.name,
+            size: file.size,
+            lastModified: file.lastModified,
+          }),
+        )
 
         /* ---- 3. UPLOADING (direct S3 PUT, dedup-aware) ---- */
         patchJob(jobId, { status: 'UPLOADING' })
 
+        /* ---- TOCTOU Validation Gate ---- */
+        const savedToctou = localStorage.getItem(toctouKey)
+        if (savedToctou) {
+          try {
+            const saved = JSON.parse(savedToctou) as {
+              size: number
+              lastModified: number
+            }
+            if (file.size !== saved.size || file.lastModified !== saved.lastModified) {
+              localStorage.removeItem(toctouKey)
+              const warnMsg =
+                'File modification detected. Upload aborted to prevent data corruption. Starting upload from scratch.'
+              // eslint-disable-next-line no-alert
+              alert(warnMsg)
+              failJob(warnMsg)
+              return
+            }
+          } catch {
+            // Ignore parse error
+          }
+        }
+
         // Initialize the byte tracker. Deduped chunks count as fully uploaded.
         for (const c of session.chunks) {
-          chunkBytesUploaded.set(c.sha256, c.already_exists ? c.size_bytes : 0)
+          chunkBytesUploaded.set(c.sequence_number, c.already_exists ? c.size_bytes : 0)
         }
 
         /** Recompute aggregate progress from the byte tracker. */
@@ -176,7 +214,7 @@ export function UploadProvider({ children }: { children: ReactNode }) {
               headers: { 'Content-Type': 'application/octet-stream' },
               onUploadProgress: (evt) => {
                 const loaded = evt.loaded ?? 0
-                chunkBytesUploaded.set(chunk.sha256, Math.min(loaded, chunk.size_bytes))
+                chunkBytesUploaded.set(chunk.sequence_number, Math.min(loaded, chunk.size_bytes))
                 recomputeProgress()
               },
             })
@@ -194,9 +232,13 @@ export function UploadProvider({ children }: { children: ReactNode }) {
         console.info('[upload] completed, file_id:', completeRes.data.file_id)
 
         /* ---- 5. FINALIZE ---- */
+        localStorage.removeItem(toctouKey)
         patchJob(jobId, { status: 'COMPLETED', progress: 100 })
         window.dispatchEvent(new CustomEvent(UPLOAD_COMPLETE_EVENT))
       } catch (err) {
+        if (activeSessionId) {
+          localStorage.removeItem(`upload_toctou_${activeSessionId}`)
+        }
         let message = 'Upload failed.'
         if (axios.isAxiosError(err)) {
           const data = err.response?.data as { error?: string; message?: string } | undefined
@@ -210,6 +252,55 @@ export function UploadProvider({ children }: { children: ReactNode }) {
     [user, patchJob],
   )
 
+  /**
+   * Recursive path resolution engine for folder uploads.
+   * Recreates the folder tree via POST /api/folders (leveraging backend idempotency)
+   * using a local PathCache map so duplicate requests are not made.
+   */
+  const uploadFolder = useCallback(
+    async (files: File[], parentId: string | null) => {
+      if (!user || files.length === 0) return
+
+      // Local path cache for this batch: "Vacation/2026" -> "folder-uuid"
+      const pathCache: Record<string, string> = {}
+
+      for (const file of files) {
+        const relPath = file.webkitRelativePath || file.name
+        const parts = relPath.split('/').filter(Boolean)
+        const dirParts = parts.slice(0, -1) // All segments except filename
+
+        let currentParentId = parentId
+        let cumulativePath = ''
+
+        for (const segment of dirParts) {
+          cumulativePath = cumulativePath ? `${cumulativePath}/${segment}` : segment
+
+          if (pathCache[cumulativePath]) {
+            currentParentId = pathCache[cumulativePath]
+          } else {
+            try {
+              const res = await apiClient.post<{ id: string }>('/folders', {
+                name: segment,
+                parent_id: currentParentId,
+              })
+              const createdId = res.data.id
+              pathCache[cumulativePath] = createdId
+              currentParentId = createdId
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.error('[uploadFolder] failed to resolve folder segment:', segment, err)
+              break
+            }
+          }
+        }
+
+        // Enqueue the file into its resolved leaf directory
+        void uploadFile(file, currentParentId)
+      }
+    },
+    [user, uploadFile],
+  )
+
   /** Remove all COMPLETED and FAILED jobs from the queue. */
   const clearCompleted = useCallback(() => {
     setJobs((prev) =>
@@ -220,8 +311,8 @@ export function UploadProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<UploadContextValue>(
-    () => ({ jobs, uploadFile, clearCompleted }),
-    [jobs, uploadFile, clearCompleted],
+    () => ({ jobs, uploadFile, uploadFolder, clearCompleted }),
+    [jobs, uploadFile, uploadFolder, clearCompleted],
   )
 
   return <UploadContext.Provider value={value}>{children}</UploadContext.Provider>

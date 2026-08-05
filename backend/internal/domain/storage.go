@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// ObjectMetadata contains server-authoritative properties of an object in storage.
+type ObjectMetadata struct {
+	ContentLength int64
+	ETag          string
+}
+
 // StorageProvider abstracts a content-addressable block store. Phase 1 ships a
 // local disk implementation that mirrors how AWS S3 behaves; Phase 4 will add an
 // S3 implementation that satisfies the same interface. Callers (HTTP handlers,
@@ -27,6 +33,13 @@ type StorageProvider interface {
 	// GetObject opens the stored object for reading. The caller must close the
 	// returned ReadCloser.
 	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
+
+	// GetObjectRange opens the stored object starting at offset for up to length bytes.
+	// If length is negative, it reads to the end of the object.
+	GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)
+
+	// HeadObject returns server-authoritative metadata (ContentLength, ETag) directly from storage.
+	HeadObject(ctx context.Context, key string) (*ObjectMetadata, error)
 
 	// DeleteObject removes the object from the underlying store. Deleting a
 	// non-existent object is not an error.

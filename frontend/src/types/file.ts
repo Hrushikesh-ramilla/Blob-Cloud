@@ -14,6 +14,22 @@ export interface FileItem {
   size_bytes: number
   created_at: string
   updated_at: string
+  deleted_at?: string | null
+  /** Aggregate size in bytes for deleted folders in Trash. */
+  aggregate_size?: number
+  /** Nested sub-items count for deleted folders in Trash. */
+  item_count?: number
+  /** Original parent folder name prior to deletion. */
+  original_location?: string
+  /** Optional thumbnail URL, populated when the SQS worker finishes. Pushed
+   *  over WebSocket via THUMBNAIL_READY and merged into local state. */
+  thumbnail_url?: string
+  /** The date/time when this file/folder was shared. */
+  shared_at?: string
+  /** Optional target file/folder ID when this item is a shortcut. */
+  target_id?: string | null
+  /** User's role on this file/folder. */
+  role?: 'OWNER' | 'EDITOR' | 'VIEWER'
 }
 
 /** A single node in the clickable breadcrumb trail. */
@@ -67,6 +83,7 @@ export interface UploadJob {
 /** Chunk descriptor sent to POST /api/upload/initiate. */
 export interface InitiateChunk {
   sha256: string
+  block_md5?: string
   size_bytes: number
 }
 
@@ -104,7 +121,62 @@ export interface CompleteRequest {
 
 /** POST /api/upload/complete response body (HTTP 200). */
 export interface CompleteResponse {
-  session_id: string
-  status: string
   file_id: string
+  status: string
+  message: string
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase C.1 — Bulk Operations API Contracts
+ * ------------------------------------------------------------------ */
+
+export interface BulkDeleteRequest {
+  ids: string[]
+}
+
+export interface BulkRestoreRequest {
+  ids: string[]
+}
+
+export interface BulkMoveRequest {
+  ids: string[]
+  parent_id: string | null
+}
+
+export interface BulkShareRequest {
+  ids: string[]
+  grantee_email: string
+  role: 'VIEWER' | 'EDITOR'
+}
+
+/* ------------------------------------------------------------------ *
+ * Phase 7.4 — File operations & sharing types
+ *
+ * Contracts for the context-menu action layer: sharing (Upgrade B),
+ * rename, move (parent_id change), and delete. Snake_case to match the
+ * Go backend's strict JSON decoder.
+ * ------------------------------------------------------------------ */
+
+/** Roles assignable to a collaborator. OWNER is read-only from the API. */
+export type CollaboratorRole = 'VIEWER' | 'EDITOR' | 'OWNER'
+
+/** A permission row returned by GET /api/files/{id}/permissions. */
+export interface CollaboratorPermission {
+  id: string
+  file_id: string
+  grantee_email: string
+  role: CollaboratorRole
+  created_at: string
+}
+
+/** POST /api/files/{id}/share request body. OWNER cannot be assigned. */
+export interface ShareRequest {
+  grantee_email: string
+  role: Exclude<CollaboratorRole, 'OWNER'>
+}
+
+/** PATCH /api/files/{id} request body. Either or both fields may be sent. */
+export interface RenameMoveRequest {
+  name?: string
+  parent_id?: string | null
 }

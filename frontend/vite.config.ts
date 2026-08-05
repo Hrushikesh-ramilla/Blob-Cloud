@@ -11,6 +11,9 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8090',
         changeOrigin: true,
+        // Phase 7.5: proxy WebSocket upgrade requests so the browser can talk
+        // to the Go backend's /api/ws endpoint same-origin in development.
+        ws: true,
       },
       '/health': {
         target: 'http://localhost:8090',

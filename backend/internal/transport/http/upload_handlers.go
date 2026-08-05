@@ -33,11 +33,21 @@ func (s *Server) HandleInitiateUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUploads(w) {
 		return
 	}
+
+	userID, code, msg := s.userFromBearer(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
 	var req service.InitiateRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
 		return
 	}
+
+	// Always bind the session to the authenticated user identity.
+	req.UserID = userID
 
 	resp, err := s.uploads.Initiate(r.Context(), req)
 	if err != nil {
@@ -56,17 +66,28 @@ func (s *Server) HandleGetSession(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUploads(w) {
 		return
 	}
+
+	userID, code, msg := s.userFromBearer(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
 	id := chi.URLParam(r, "id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing session id"})
 		return
 	}
 
-	resp, err := s.uploads.GetSession(r.Context(), id)
+	resp, err := s.uploads.GetSession(r.Context(), id, userID)
 	if err != nil {
 		// Missing session rows surface as sql.ErrNoRows -> 404.
 		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no rows") {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		if strings.Contains(err.Error(), "access denied") {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "access denied"})
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -83,17 +104,26 @@ func (s *Server) HandleCompleteUpload(w http.ResponseWriter, r *http.Request) {
 	if !s.requireUploads(w) {
 		return
 	}
+
+	userID, code, msg := s.userFromBearer(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
 	var req service.CompleteRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body: " + err.Error()})
 		return
 	}
 
-	resp, err := s.uploads.Complete(r.Context(), req)
+	resp, err := s.uploads.Complete(r.Context(), req, userID)
 	if err != nil {
-		// Missing blocks / wrong session state -> 400; anything else -> 500.
+		// Missing blocks / wrong session state -> 400; access denied -> 403; anything else -> 500.
 		code := http.StatusInternalServerError
-		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not in storage") ||
+		if strings.Contains(err.Error(), "access denied") {
+			code = http.StatusForbidden
+		} else if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "not in storage") ||
 			strings.Contains(err.Error(), "cannot complete") {
 			code = http.StatusBadRequest
 		}

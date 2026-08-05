@@ -504,8 +504,360 @@ func TestPermission_RecursiveCTE(t *testing.T) {
 	}
 	// ...but it IS satisfied if EDITOR+OWNER are both acceptable.
 	allowed, _ = perms.CheckUserPermission(ctx, leaf.ID, "coworker@example.com", []string{domain.RoleViewer, domain.RoleEditor})
-	if !allowed {
-		t.Fatal("VIEWER should satisfy a [VIEWER,EDITOR] requirement")
+		if !allowed {
+			t.Fatal("VIEWER should satisfy a [VIEWER,EDITOR] requirement")
+		}
+	}
+
+// ===========================================================================
+// Phase 7.4: Update (rename/move), IsDescendant, DeleteRecursive
+// ===========================================================================
+
+func TestFileRepository_Update_Rename(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "renamer@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &domain.File{UserID: u.ID, Name: "old_name.txt", SizeBytes: 100}
+	if err := files.Create(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rename only.
+	updated := &domain.File{ID: f.ID, Name: "new_name.txt"}
+	if err := files.Update(ctx, updated); err != nil {
+		t.Fatalf("Update rename: %v", err)
+	}
+	if updated.Name != "new_name.txt" {
+		t.Fatalf("expected name 'new_name.txt', got %q", updated.Name)
+	}
+	// Verify via GetByID.
+	got, err := files.GetByID(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("GetByID after rename: %v", err)
+	}
+	if got.Name != "new_name.txt" {
+		t.Fatalf("GetByID name mismatch: %q", got.Name)
 	}
 }
+
+func TestFileRepository_Update_MoveToRoot(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "mover@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a folder, then a file inside it.
+	folder := &domain.File{UserID: u.ID, Name: "Parent", IsDirectory: true}
+	if err := files.Create(ctx, folder); err != nil {
+		t.Fatal(err)
+	}
+	child := &domain.File{UserID: u.ID, Name: "child.txt", ParentID: &folder.ID, SizeBytes: 50}
+	if err := files.Create(ctx, child); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move child to root (parent_id = empty string -> nil).
+	root := ""
+	updated := &domain.File{ID: child.ID, ParentID: &root}
+	if err := files.Update(ctx, updated); err != nil {
+		t.Fatalf("Update move to root: %v", err)
+	}
+	if updated.ParentID != nil {
+		t.Fatalf("expected parent_id nil (root), got %v", updated.ParentID)
+	}
+}
+
+func TestFileRepository_Update_MoveToFolder(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "move2@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	folderA := &domain.File{UserID: u.ID, Name: "A", IsDirectory: true}
+	folderB := &domain.File{UserID: u.ID, Name: "B", IsDirectory: true}
+	if err := files.Create(ctx, folderA); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Create(ctx, folderB); err != nil {
+		t.Fatal(err)
+	}
+
+	file := &domain.File{UserID: u.ID, Name: "doc.txt", ParentID: &folderA.ID, SizeBytes: 10}
+	if err := files.Create(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move doc.txt from A into B.
+	updated := &domain.File{ID: file.ID, ParentID: &folderB.ID}
+	if err := files.Update(ctx, updated); err != nil {
+		t.Fatalf("Update move to folder: %v", err)
+	}
+	if updated.ParentID == nil || *updated.ParentID != folderB.ID {
+		t.Fatalf("expected parent_id = %s, got %v", folderB.ID, updated.ParentID)
+	}
+}
+
+func TestFileRepository_IsDescendant_Self(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "desc@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+	f := &domain.File{UserID: u.ID, Name: "Folder", IsDirectory: true}
+	if err := files.Create(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+
+	isDesc, err := files.IsDescendant(ctx, f.ID, f.ID)
+	if err != nil {
+		t.Fatalf("IsDescendant self: %v", err)
+	}
+	if !isDesc {
+		t.Fatal("a node should be a descendant of itself")
+	}
+}
+
+func TestFileRepository_IsDescendant_NestedHierarchy(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "nest@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// root -> A -> B -> C
+	root := &domain.File{UserID: u.ID, Name: "root", IsDirectory: true}
+	if err := files.Create(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	a := &domain.File{UserID: u.ID, Name: "A", IsDirectory: true, ParentID: &root.ID}
+	if err := files.Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	b := &domain.File{UserID: u.ID, Name: "B", IsDirectory: true, ParentID: &a.ID}
+	if err := files.Create(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	c := &domain.File{UserID: u.ID, Name: "C", IsDirectory: true, ParentID: &b.ID}
+	if err := files.Create(ctx, c); err != nil {
+		t.Fatal(err)
+	}
+
+	// C is a descendant of root.
+	isDesc, err := files.IsDescendant(ctx, c.ID, root.ID)
+	if err != nil {
+		t.Fatalf("IsDescendant C of root: %v", err)
+	}
+	if !isDesc {
+		t.Fatal("C should be a descendant of root")
+	}
+
+	// root is NOT a descendant of C.
+	isDesc, err = files.IsDescendant(ctx, root.ID, c.ID)
+	if err != nil {
+		t.Fatalf("IsDescendant root of C: %v", err)
+	}
+	if isDesc {
+		t.Fatal("root should NOT be a descendant of C")
+	}
+}
+
+func TestFileRepository_DeleteRecursive_SingleFile(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+	blocks := postgresrepo.NewBlockRepository(db)
+
+	u := &domain.User{Email: "delfile@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file with two blocks.
+	f := &domain.File{UserID: u.ID, Name: "to_delete.bin", SizeBytes: 8}
+	if err := files.Create(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+
+	b1 := &domain.Block{SHA256: "d" + strings_64a, SizeBytes: 4}
+	b2 := &domain.Block{SHA256: "e" + strings_64b, SizeBytes: 4}
+	for _, b := range []*domain.Block{b1, b2} {
+		if err := blocks.Create(ctx, b); err != nil {
+			t.Fatalf("create block: %v", err)
+		}
+	}
+	if err := blocks.LinkBlocksToFile(ctx, f.ID, []domain.BlockSequence{
+		{BlockID: b1.ID, SequenceNumber: 0},
+		{BlockID: b2.ID, SequenceNumber: 1},
+	}); err != nil {
+		t.Fatalf("link blocks: %v", err)
+	}
+
+	// Delete the file. Both blocks should be orphaned (no other file refs them).
+	count, orphans, err := files.DeleteRecursive(ctx, f.ID)
+	if err != nil {
+		t.Fatalf("DeleteRecursive: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 deleted, got %d", count)
+	}
+	if len(orphans) != 2 {
+		t.Fatalf("expected 2 orphaned blocks, got %d", len(orphans))
+	}
+
+	// Verify file is gone.
+	_, err = files.GetByID(ctx, f.ID)
+	if err == nil {
+		t.Fatal("file should have been deleted")
+	}
+
+	// Blocks still exist in the blocks table (we only GC from storage, not
+	// the blocks metadata table — other files might still reference them).
+}
+
+func TestFileRepository_DeleteRecursive_NestedFolders(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "deldir@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// folder -> subfolder -> file1, file2
+	folder := &domain.File{UserID: u.ID, Name: "Dir", IsDirectory: true}
+	if err := files.Create(ctx, folder); err != nil {
+		t.Fatal(err)
+	}
+	sub := &domain.File{UserID: u.ID, Name: "Sub", IsDirectory: true, ParentID: &folder.ID}
+	if err := files.Create(ctx, sub); err != nil {
+		t.Fatal(err)
+	}
+	f1 := &domain.File{UserID: u.ID, Name: "a.txt", ParentID: &sub.ID, SizeBytes: 1}
+	f2 := &domain.File{UserID: u.ID, Name: "b.txt", ParentID: &folder.ID, SizeBytes: 2}
+	if err := files.Create(ctx, f1); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Create(ctx, f2); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the top folder — everything under it should be removed.
+	count, _, err := files.DeleteRecursive(ctx, folder.ID)
+	if err != nil {
+		t.Fatalf("DeleteRecursive: %v", err)
+	}
+	if count != 4 {
+		t.Fatalf("expected 4 deleted (folder + sub + 2 files), got %d", count)
+	}
+
+	// Verify all gone.
+	for _, id := range []string{folder.ID, sub.ID, f1.ID, f2.ID} {
+		_, err = files.GetByID(ctx, id)
+		if err == nil {
+			t.Fatalf("expected %s to be deleted", id)
+		}
+	}
+}
+
+func TestFileRepository_DeleteRecursive_PreservesUnrelatedFiles(t *testing.T) {
+	db := openDB(t)
+	defer db.Close()
+	freshSchema(t, db)
+
+	ctx := context.Background()
+	users := postgresrepo.NewUserRepository(db)
+	files := postgresrepo.NewFileRepository(db)
+
+	u := &domain.User{Email: "preserve@example.com", PasswordHash: "x"}
+	if err := users.Create(ctx, u); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two sibling folders, each with a file.
+	folderA := &domain.File{UserID: u.ID, Name: "A", IsDirectory: true}
+	folderB := &domain.File{UserID: u.ID, Name: "B", IsDirectory: true}
+	if err := files.Create(ctx, folderA); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Create(ctx, folderB); err != nil {
+		t.Fatal(err)
+	}
+	fileA := &domain.File{UserID: u.ID, Name: "in_a.txt", ParentID: &folderA.ID, SizeBytes: 1}
+	fileB := &domain.File{UserID: u.ID, Name: "in_b.txt", ParentID: &folderB.ID, SizeBytes: 1}
+	if err := files.Create(ctx, fileA); err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Create(ctx, fileB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete folder A. B and its contents must survive.
+	count, _, err := files.DeleteRecursive(ctx, folderA.ID)
+	if err != nil {
+		t.Fatalf("DeleteRecursive: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 deleted, got %d", count)
+	}
+
+	// B and in_b still exist.
+	_, err = files.GetByID(ctx, folderB.ID)
+	if err != nil {
+		t.Fatalf("folder B should still exist: %v", err)
+	}
+	_, err = files.GetByID(ctx, fileB.ID)
+	if err != nil {
+		t.Fatalf("file in_b should still exist: %v", err)
+	}
+}
+
 

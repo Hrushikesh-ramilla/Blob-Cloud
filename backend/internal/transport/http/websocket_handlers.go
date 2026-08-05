@@ -73,6 +73,12 @@ func (s *Server) HandleWSConnection(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 		return
 	}
+	if claims.SessionID != "" && s.sessions != nil {
+		if _, err := s.sessions.GetSessionByID(r.Context(), claims.SessionID); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session has been revoked or expired"})
+			return
+		}
+	}
 
 	// 2. Upgrade to WebSocket.
 	conn, err := s.wsUpgrader.Upgrade(w, r, nil)

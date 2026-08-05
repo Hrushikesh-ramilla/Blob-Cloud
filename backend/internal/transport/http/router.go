@@ -13,8 +13,9 @@ import (
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Length, Content-Range, X-Directory-Deleted")
 
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -39,6 +40,30 @@ func NewRouter(s *Server) http.Handler {
 	r.Get("/health", s.HandleHealth)
 	r.Put("/local-storage/blocks/{hash}", s.HandlePutBlock)
 
+	// --- Auth endpoints (register / login / refresh / verify / google / password recovery / logout) ---
+	r.Route("/api/auth", func(r chi.Router) {
+		r.Post("/register", s.HandleRegister)
+		r.Post("/login", s.HandleLogin)
+		r.Post("/refresh", s.HandleRefresh)
+		r.Post("/verify", s.HandleVerify)
+		r.Post("/resend-verification", s.HandleResendVerification)
+		r.Post("/google", s.HandleGoogleOAuth)
+		r.Post("/forgot-password", s.HandleForgotPassword)
+		r.Post("/reset-password", s.HandleResetPassword)
+		r.Post("/change-password", s.HandleChangePassword)
+		r.Post("/logout", s.HandleLogout)
+	})
+
+
+	// --- Directory listing, folder creation, & user metrics ---
+	r.Post("/api/folders", s.HandleCreateFolder)
+	r.Get("/api/user/storage", s.HandleGetUserStorage)
+	r.Route("/api/user/sessions", func(r chi.Router) {
+		r.Get("/", s.HandleListSessions)
+		r.Post("/revoke", s.HandleRevokeSession)
+		r.Post("/revoke-all", s.HandleRevokeAllOtherSessions)
+	})
+
 	// --- Phase 3: resumable uploads (Upgrade A) ---
 	r.Route("/api/upload", func(r chi.Router) {
 		r.Post("/initiate", s.HandleInitiateUpload)
@@ -47,9 +72,26 @@ func NewRouter(s *Server) http.Handler {
 	})
 
 	// --- Phase 3: sharing & permissions (Upgrade B) ---
+	// --- Phase 7.4: file operations (rename, move, delete, download) ---
 	r.Route("/api/files", func(r chi.Router) {
+		r.Get("/", s.HandleListFiles)
+		r.Get("/download", s.HandleDownload)
+		r.Get("/trash", s.HandleListTrash)
+
+		// Phase C.1: Bulk Operations
+		r.Post("/bulk/delete", s.HandleBulkSoftDelete)
+		r.Post("/bulk/restore", s.HandleBulkRestore)
+		r.Post("/bulk/move", s.HandleBulkMove)
+		r.Post("/shortcut", s.HandleCreateShortcut)
+		r.Delete("/bulk/permanent", s.HandleBulkHardDelete)
+
 		r.Post("/{id}/share", s.HandleShare)
 		r.Get("/{id}/permissions", s.HandleListPermissions)
+		r.Patch("/{id}", s.HandleRenameMove)
+		r.Delete("/{id}", s.HandleDelete)
+		r.Post("/{id}/restore", s.HandleRestore)
+		r.Delete("/{id}/permanent", s.HandlePermanentDelete)
+		r.Get("/{id}/download", s.HandleDownload)
 	})
 
 	// --- Phase 6: real-time notifications (WebSocket) ---

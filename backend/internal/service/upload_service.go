@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go-drive-clone/internal/domain"
@@ -73,6 +74,7 @@ type InitiateRequest struct {
 // InitiateChunk is one chunk declared by the client at initiation.
 type InitiateChunk struct {
 	SHA256    string `json:"sha256"`
+	BlockMD5  string `json:"block_md5"`
 	SizeBytes int32  `json:"size_bytes"`
 }
 
@@ -139,6 +141,7 @@ func (s *UploadService) Initiate(ctx context.Context, req InitiateRequest) (*Ini
 		alreadyExists := existingSet[c.SHA256]
 		sb := domain.SessionBlock{
 			BlockHash:      c.SHA256,
+			BlockMD5:       c.BlockMD5,
 			SequenceNumber: i,
 			SizeBytes:      c.SizeBytes,
 			IsUploaded:     alreadyExists,
@@ -190,10 +193,13 @@ type SessionStatusResponse struct {
 
 // GetSession returns the session and, for any chunk still not uploaded, a fresh
 // upload URL. A COMPLETED session returns its terminal status with no URLs.
-func (s *UploadService) GetSession(ctx context.Context, id string) (*SessionStatusResponse, error) {
+func (s *UploadService) GetSession(ctx context.Context, id string, userID string) (*SessionStatusResponse, error) {
 	session, blocks, err := s.sessions.GetSessionByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
+	}
+	if userID != "" && session.UserID != userID {
+		return nil, errors.New("access denied: session owned by another user")
 	}
 
 	resp := &SessionStatusResponse{
@@ -245,7 +251,7 @@ type CompleteResponse struct {
 //  6. Grant the uploader a default OWNER permission.
 //  7. Set session status COMPLETED.
 //  8. Commit. Any error rolls the whole thing back.
-func (s *UploadService) Complete(ctx context.Context, req CompleteRequest) (*CompleteResponse, error) {
+func (s *UploadService) Complete(ctx context.Context, req CompleteRequest, userID string) (*CompleteResponse, error) {
 	if req.SessionID == "" {
 		return nil, errors.New("session_id is required")
 	}
@@ -260,23 +266,48 @@ func (s *UploadService) Complete(ctx context.Context, req CompleteRequest) (*Com
 		users := s.users.WithTx(tx)
 
 		// 1. Load session + blocks (locks the session row for the tx).
-			session, sessionBlocks, err := sessions.GetSessionByID(ctx, req.SessionID)
-			if err != nil {
-				return err
-			}
-			if session.Status != domain.SessionStatusInitiated {
-				return fmt.Errorf("session %s is %s, cannot complete", req.SessionID, session.Status)
-			}
-			uploaderID = session.UserID
+		session, sessionBlocks, err := sessions.GetSessionByID(ctx, req.SessionID)
+		if err != nil {
+			return err
+		}
+		if userID != "" && session.UserID != userID {
+			return errors.New("access denied: session owned by another user")
+		}
+		if session.Status != domain.SessionStatusInitiated {
+			return fmt.Errorf("session %s is %s, cannot complete", req.SessionID, session.Status)
+		}
+		uploaderID = session.UserID
 
-		// 2. Verify every declared block is physically present in storage. A
-		//    missing block means the client never finished uploading it.
+		// 2. Server-Authoritative Verification (HeadObject directly from S3/R2 or local storage).
+		// Check both sizing (prevent storage quota spoofing) and ETag MD5 hash (prevent ghost commits).
 		for _, b := range sessionBlocks {
-			if b.IsUploaded {
-				continue
+			meta, err := s.storage.HeadObject(ctx, "blocks/"+b.BlockHash)
+			if err != nil {
+				s.log.Warn("complete upload security alert: block missing in storage",
+					"session_id", req.SessionID, "block_hash", b.BlockHash, "err", err)
+				return fmt.Errorf("payload integrity violation: block %s not in storage: %w", b.BlockHash, err)
 			}
-			if err := s.verifyBlockExists(ctx, b.BlockHash); err != nil {
-				return fmt.Errorf("block %s not in storage: %w", b.BlockHash, err)
+
+			// Server-Authoritative Sizing Check
+			if meta.ContentLength != int64(b.SizeBytes) {
+				s.log.Warn("complete upload security alert: storage quota / block size mismatch",
+					"session_id", req.SessionID, "block_hash", b.BlockHash,
+					"expected_size", b.SizeBytes, "actual_s3_size", meta.ContentLength)
+				return fmt.Errorf("payload integrity violation: block %s size mismatch (expected %d, got %d)",
+					b.BlockHash, b.SizeBytes, meta.ContentLength)
+			}
+
+			// Cryptographic ETag Verification
+			if b.BlockMD5 != "" {
+				cleanETag := strings.Trim(strings.ToLower(meta.ETag), "\"")
+				expectedMD5 := strings.Trim(strings.ToLower(b.BlockMD5), "\"")
+				if cleanETag != expectedMD5 {
+					s.log.Warn("complete upload security alert: ETag cryptographic verification failed (ghost commit detected)",
+						"session_id", req.SessionID, "block_hash", b.BlockHash,
+						"expected_md5", expectedMD5, "s3_etag", cleanETag)
+					return fmt.Errorf("payload integrity violation: block %s ETag mismatch (expected %s, got %s)",
+						b.BlockHash, expectedMD5, cleanETag)
+				}
 			}
 		}
 
@@ -341,11 +372,13 @@ func (s *UploadService) Complete(ctx context.Context, req CompleteRequest) (*Com
 
 	// Publish a thumbnail job to the event queue. Failure to publish is
 	// non-fatal — the upload succeeded, the thumbnail will just be missed.
-	if err := s.publisher.PublishThumbnailJob(ctx, queue.ThumbnailMessage{
-		FileID: result.FileID,
-		UserID: uploaderID,
-	}); err != nil {
-		s.log.Error("failed to publish thumbnail job", "file_id", result.FileID, "err", err)
+	if s.publisher != nil {
+		if err := s.publisher.PublishThumbnailJob(ctx, queue.ThumbnailMessage{
+			FileID: result.FileID,
+			UserID: uploaderID,
+		}); err != nil {
+			s.log.Error("failed to publish thumbnail job", "file_id", result.FileID, "err", err)
+		}
 	}
 
 	// Notify the uploader's open tabs so their file explorer refreshes.

@@ -23,11 +23,8 @@ interface NewFolderModalProps {
 }
 
 /**
- * Accessible modal for creating a new folder. Implements:
- * - Focus trapping (Tab / Shift+Tab cycles within the dialog)
- * - Escape to close
- * - Backdrop click to close
- * - POST /api/folders on submit, with error handling
+ * Precision Utilitarian New Folder Dialog.
+ * Zero glassmorphism, solid surface `#111317`, 1px border rule.
  */
 export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolderModalProps) {
   const [name, setName] = useState('')
@@ -36,21 +33,16 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
   const inputRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
-  // Focus the input when the modal opens
   useEffect(() => {
     if (open) {
-      // Small delay so the transition renders first
       const t = requestAnimationFrame(() => inputRef.current?.focus())
       return () => cancelAnimationFrame(t)
     }
-    // Reset state on close
     setName('')
     setError(null)
     setLoading(false)
   }, [open])
 
-  // Focus trapping (native DOM listener — uses globalThis.KeyboardEvent,
-  // not React's synthetic event type)
   useEffect(() => {
     if (!open) return
 
@@ -130,7 +122,7 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 backdrop-blur-sm animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-arch-950/90 animate-fade-in p-4 select-none"
       onClick={handleBackdropClick}
       onKeyDown={handleEscape}
       role="presentation"
@@ -140,10 +132,13 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
         role="dialog"
         aria-modal="true"
         aria-label="Create new folder"
-        className="relative w-full max-w-md rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl"
+        className="relative w-full max-w-md rounded-md border border-arch-border bg-arch-900 p-5 shadow-sharp text-zinc-100"
       >
-        {/* Title */}
-        <h2 className="mb-5 text-lg font-semibold text-zinc-50">New Folder</h2>
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-arch-border pb-3 mb-4">
+          <h2 className="font-display text-sm font-bold text-zinc-100">CREATE NEW FOLDER</h2>
+          <span className="key-badge">ESC</span>
+        </div>
 
         {/* Server error */}
         {error && (
@@ -155,14 +150,14 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
         {/* Form */}
         <form onSubmit={handleSubmit} noValidate>
           <div className="mb-5">
-            <label htmlFor="new-folder-name" className="mb-1.5 block text-sm font-medium text-zinc-300">
-              Folder name
+            <label htmlFor="new-folder-name" className="mb-1.5 block font-mono text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+              FOLDER NAME
             </label>
             <Input
               ref={inputRef}
               id="new-folder-name"
               type="text"
-              placeholder="Untitled Folder"
+              placeholder="e.g. Production Assets"
               value={name}
               onChange={(e) => {
                 setName(e.target.value)
@@ -173,7 +168,7 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
             />
           </div>
 
-          <div className="flex items-center justify-end gap-3">
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-arch-border">
             <Button
               type="button"
               variant="secondary"
@@ -183,7 +178,7 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
               Cancel
             </Button>
             <Button type="submit" loading={loading}>
-              Create
+              Create Folder
             </Button>
           </div>
         </form>

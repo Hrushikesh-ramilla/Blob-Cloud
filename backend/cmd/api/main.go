@@ -19,6 +19,7 @@ import (
 	"go-drive-clone/internal/config"
 	"go-drive-clone/internal/database"
 	"go-drive-clone/internal/domain"
+	"go-drive-clone/internal/email"
 	postgresrepo "go-drive-clone/internal/repository/postgres"
 	"go-drive-clone/internal/queue"
 	wsSync "go-drive-clone/internal/sync"
@@ -63,16 +64,14 @@ func main() {
 	case "s3":
 		s3, err := storage.NewS3Storage(ctx, cfg, log)
 		if err != nil {
-			if cfg.ENV == "production" {
-				log.Error("failed to initialise S3 storage (production: fatal)", "err", err)
-				os.Exit(1)
-			}
-			log.Warn("S3 storage unavailable, falling back to local", "err", err)
-			cfg.StorageProvider = "local"
-			// fall through to local
-		} else {
-			storageProvider = s3
+			// S3 was explicitly requested: a failure here means bad keys, a
+			// missing bucket, or a network timeout. Falling back silently to
+			// local storage would mask the misconfiguration (uploads would
+			// appear to work but vanish into ./tmp/storage/). Fail loudly.
+			log.Error("S3 storage initialisation failed (STORAGE_PROVIDER=s3)", "err", err)
+			os.Exit(1)
 		}
+		storageProvider = s3
 	}
 
 	if storageProvider == nil {
@@ -87,6 +86,14 @@ func main() {
 	log.Info("storage provider active", "provider", cfg.StorageProvider)
 	srv := httpx.NewServer(storageProvider, log)
 
+	mailer := email.NewMailer(log)
+	srv = srv.WithMailer(mailer)
+	googleClientID := os.Getenv("GOOGLE_CLIENT_ID")
+	if googleClientID == "" {
+		googleClientID = os.Getenv("VITE_GOOGLE_CLIENT_ID")
+	}
+	srv = srv.WithGoogleOAuth(googleClientID)
+
 	// Phase 6: WebSocket Hub — started unconditionally so WS connections
 	// can be accepted even if the DB is unavailable (auth only requires JWT).
 	var hub *wsSync.Hub
@@ -99,6 +106,8 @@ func main() {
 
 	// workerWg tracks SQS worker goroutines for graceful shutdown.
 	var workerWg sync.WaitGroup
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
 
 	db, dbErr := database.New(ctx, cfg, log)
 	if dbErr != nil {
@@ -126,6 +135,7 @@ func main() {
 			blocks := postgresrepo.NewBlockRepository(db)
 			sessions := postgresrepo.NewUploadSessionRepository(db)
 			perms := postgresrepo.NewPermissionRepository(db)
+			userSessions := postgresrepo.NewSessionRepository(db)
 
 			// Build the notifier that integration points will use.
 			// Falls back to a no-op if the Hub isn't configured.
@@ -143,8 +153,16 @@ func main() {
 			}
 
 			uploadSvc := service.NewUploadService(db, users, files, blocks, sessions, perms, storageProvider, publisher, notifier, log)
-			srv = srv.WithUploads(uploadSvc, perms)
-			srv = srv.WithUsers(users)
+				srv = srv.WithUploads(uploadSvc, perms)
+				srv = srv.WithUsers(users)
+				srv = srv.WithSessions(userSessions)
+
+				// Phase 7.4: file operations (rename, move, delete, download).
+				fileSvc := service.NewFileService(db, users, files, blocks, perms, storageProvider, log)
+				srv = srv.WithFileOperations(fileSvc)
+
+				zipSvc := service.NewZipService(files, blocks, storageProvider)
+				srv = srv.WithZipOperations(zipSvc)
 
 			// Worker pool: background thumbnail generation.
 			if cfg.SQSQueueURL != "" {
@@ -157,7 +175,7 @@ func main() {
 					int32(cfg.SQSPollTimeoutSec),
 					log,
 				)
-				wp.Start(ctx, &workerWg)
+				wp.Start(workerCtx, &workerWg)
 				log.Info("SQS worker pool started", "workers", cfg.SQSNumWorkers)
 			}
 
@@ -199,7 +217,8 @@ func main() {
 
 	// 1. Stop SQS workers (they may be mid-processing a message).
 	if cfg.SQSQueueURL != "" {
-		log.Info("waiting for SQS workers to finish...")
+		log.Info("cancelling worker context and waiting for SQS workers to finish...")
+		workerCancel()
 		workerWg.Wait()
 		log.Info("all workers stopped")
 	}

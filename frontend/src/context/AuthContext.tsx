@@ -32,6 +32,9 @@ export interface AuthResult {
   ok: boolean
   /** Human-readable error string for the form, or null on success. */
   error: string | null
+  verificationRequired?: boolean
+  userId?: string
+  email?: string
 }
 
 export interface AuthContextValue {
@@ -43,13 +46,14 @@ export interface AuthContextValue {
   isLoading: boolean
   login: (email: string, password: string) => Promise<AuthResult>
   register: (email: string, password: string) => Promise<AuthResult>
+  loginWithTokens: (token: string, refreshToken: string) => void
   logout: () => void
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
 /** Normalize an Axios error into a single readable string. */
-function extractError(err: unknown, fallback: string): string {
+export function extractError(err: unknown, fallback: string): string {
   if (axios.isAxiosError(err)) {
     const data = err.response?.data as { error?: string; message?: string } | undefined
     return data?.error || data?.message || err.message || fallback
@@ -59,10 +63,23 @@ function extractError(err: unknown, fallback: string): string {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<JwtUser | null>(null)
   const [token, setToken] = useState<string | null>(() => getAccessToken())
   const [refreshToken, setRefreshToken] = useState<string | null>(() => getRefreshToken())
-  const [isLoading, setIsLoading] = useState(true)
+  const [user, setUser] = useState<JwtUser | null>(() => {
+    const access = getAccessToken()
+    return isTokenValid(access) ? decodeUser(access) : null
+  })
+  const [isLoading, setIsLoading] = useState(() => {
+    const access = getAccessToken()
+    const refresh = getRefreshToken()
+    if (isTokenValid(access)) {
+      return false
+    }
+    if (access && refresh) {
+      return true
+    }
+    return false
+  })
   const didBootstrap = useRef(false)
 
   const isAuthenticated = token !== null && user !== null
@@ -74,6 +91,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRefreshToken(refresh)
     setUser(decodeUser(access))
   }, [])
+
+  const loginWithTokens = useCallback(
+    (access: string, refresh: string) => {
+      applyTokens(access, refresh)
+    },
+    [applyTokens],
+  )
 
   const wipeSession = useCallback(() => {
     clearTokens()
@@ -133,10 +157,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const res = await apiClient.post<AuthResponse>('/auth/login', { email, password })
         applyTokens(res.data.token, res.data.refresh_token)
-        // eslint-disable-next-line no-console
-        console.info('[auth] login success', { user_id: res.data.token ? 'redacted' : null })
         return { ok: true, error: null }
       } catch (err) {
+        if (axios.isAxiosError(err) && err.response) {
+          const data = err.response.data as { error?: string; user_id?: string; email?: string }
+          if (data?.error === 'verification_required' && data?.user_id) {
+            return { ok: false, error: 'verification_required', verificationRequired: true, userId: data.user_id, email: data.email || email }
+          }
+        }
         return { ok: false, error: extractError(err, 'Invalid email or password.') }
       }
     },
@@ -146,10 +174,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (email: string, password: string): Promise<AuthResult> => {
       try {
-        const res = await apiClient.post<AuthResponse>('/auth/register', { email, password })
-        applyTokens(res.data.token, res.data.refresh_token)
-        // eslint-disable-next-line no-console
-        console.info('[auth] register success')
+        const res = await apiClient.post<{ status?: string; user_id?: string; email?: string; token?: string; refresh_token?: string }>(
+          '/auth/register',
+          { email, password },
+        )
+        if (res.data.status === 'verification_required' && res.data.user_id) {
+          return { ok: false, error: null, verificationRequired: true, userId: res.data.user_id, email: res.data.email || email }
+        }
+        if (res.data.token && res.data.refresh_token) {
+          applyTokens(res.data.token, res.data.refresh_token)
+        }
         return { ok: true, error: null }
       } catch (err) {
         return { ok: false, error: extractError(err, 'Registration failed.') }
@@ -158,10 +192,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyTokens],
   )
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    const refresh = getRefreshToken()
+    if (refresh) {
+      try {
+        await apiClient.post('/auth/logout', { refresh_token: refresh })
+      } catch {
+        // Silently ignore errors during logout API request to ensure client session is always wiped
+      }
+    }
     wipeSession()
     dispatchUnauth() // ensure any open tabs/hooks also clear
   }, [wipeSession])
+
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -172,9 +215,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      loginWithTokens,
       logout,
     }),
-    [user, token, refreshToken, isAuthenticated, isLoading, login, register, logout],
+    [user, token, refreshToken, isAuthenticated, isLoading, login, register, loginWithTokens, logout],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

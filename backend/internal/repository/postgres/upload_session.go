@@ -35,8 +35,8 @@ func (r *UploadSessionRepository) CreateSession(ctx context.Context, session *do
 		RETURNING id, created_at, updated_at
 	`
 	const blockQ = `
-		INSERT INTO session_blocks (session_id, block_hash, sequence_number, size_bytes, is_uploaded)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO session_blocks (session_id, block_hash, block_md5, sequence_number, size_bytes, is_uploaded)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`
 
 	// Use a tx whether bound to pool or caller tx: if bound to a caller tx, we
@@ -72,7 +72,7 @@ func (r *UploadSessionRepository) createSessionInline(
 	for _, b := range blocks {
 		b.SessionID = session.ID
 		if _, err := r.db.ExecContext(ctx, blockQ,
-			b.SessionID, b.BlockHash, b.SequenceNumber, b.SizeBytes, b.IsUploaded); err != nil {
+			b.SessionID, b.BlockHash, b.BlockMD5, b.SequenceNumber, b.SizeBytes, b.IsUploaded); err != nil {
 			return fmt.Errorf("insert session_block seq=%d: %w", b.SequenceNumber, err)
 		}
 	}
@@ -98,7 +98,7 @@ func (r *UploadSessionRepository) GetSessionByID(ctx context.Context, id string)
 	}
 
 	const blocksQ = `
-		SELECT session_id, block_hash, sequence_number, size_bytes, is_uploaded
+		SELECT session_id, block_hash, COALESCE(block_md5, ''), sequence_number, size_bytes, is_uploaded
 		FROM session_blocks
 		WHERE session_id = $1
 		ORDER BY sequence_number ASC
@@ -112,7 +112,7 @@ func (r *UploadSessionRepository) GetSessionByID(ctx context.Context, id string)
 	var blocks []domain.SessionBlock
 	for rows.Next() {
 		var b domain.SessionBlock
-		if err := rows.Scan(&b.SessionID, &b.BlockHash, &b.SequenceNumber, &b.SizeBytes, &b.IsUploaded); err != nil {
+		if err := rows.Scan(&b.SessionID, &b.BlockHash, &b.BlockMD5, &b.SequenceNumber, &b.SizeBytes, &b.IsUploaded); err != nil {
 			return nil, nil, fmt.Errorf("scan session_block: %w", err)
 		}
 		blocks = append(blocks, b)

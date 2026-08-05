@@ -3,32 +3,36 @@ import { forwardRef, type InputHTMLAttributes } from 'react'
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   /** Optional validation error rendered below the input. */
   error?: string
+  /** Use monospace font for technical codes/tokens. */
+  mono?: boolean
 }
 
 /**
- * Styled text input with violet focus ring and optional inline error.
- * Sets aria-invalid + aria-describedby automatically when an error is given.
+ * Precision Architectural Input.
+ * High-density text input with 1px border rules and amber focus ring.
  */
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ error, id, className = '', ...rest }, ref) => {
+  ({ error, mono = false, id, className = '', ...rest }, ref) => {
     const errorId = error && id ? `${id}-error` : undefined
 
     return (
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1">
         <input
           ref={ref}
           id={id}
           aria-invalid={error ? 'true' : undefined}
           aria-describedby={errorId}
-          className={`w-full rounded-lg border bg-zinc-900/50 px-3.5 py-2.5 text-sm text-zinc-50 placeholder-zinc-500 transition-all duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500/60 ${
+          className={`w-full rounded border bg-arch-950 px-3 py-2 text-xs text-zinc-100 placeholder-zinc-500 transition-colors duration-150 focus:outline-none ${
+            mono ? 'font-mono tracking-wide' : 'font-sans'
+          } ${
             error
-              ? 'border-red-500/60 focus:ring-red-500/20'
-              : 'border-zinc-800 hover:border-zinc-700'
+              ? 'border-rose-500/80 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/50'
+              : 'border-arch-border hover:border-arch-700 focus:border-amber-500/90 focus:ring-1 focus:ring-amber-500/30'
           } ${className}`}
           {...rest}
         />
         {error && (
-          <p id={errorId} className="text-xs text-red-400" role="alert">
+          <p id={errorId} className="text-[11px] font-mono text-rose-400" role="alert">
             {error}
           </p>
         )}

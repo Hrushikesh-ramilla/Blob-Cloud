@@ -199,6 +199,13 @@ func (h *Hub) NotifyUser(userID string, event NotificationEvent) {
 	h.notify <- notify{userIDs: []string{userID}, event: event}
 }
 
+// GetActiveConnCount returns the number of active WebSocket connections for userID.
+func (h *Hub) GetActiveConnCount(userID string) int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clie[userID])
+}
+
 // Shutdown stops the run loop and sends a CloseGoingAway control frame to
 // every connected client so browsers close their sockets cleanly.
 func (h *Hub) Shutdown() {

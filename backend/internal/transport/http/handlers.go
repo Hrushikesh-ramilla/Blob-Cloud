@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go-drive-clone/internal/domain"
+	"go-drive-clone/internal/email"
 	postgresrepo "go-drive-clone/internal/repository/postgres"
 	"go-drive-clone/internal/service"
 	"go-drive-clone/internal/sync"
@@ -30,11 +31,18 @@ type Server struct {
 	uploads *service.UploadService
 	perms   *postgresrepo.PermissionRepository
 	users   *postgresrepo.UserRepository
+	sessions *postgresrepo.SessionRepository
+	// Phase 7.4: file operations (rename, move, delete, download). nil when
+	// the DB is unavailable.
+	fileOps *service.FileService
+	zipOps  *service.ZipService
 	// Phase 6: real-time layer. hub is nil when WS notifications aren't
 	// configured; the WS handler then returns 503.
-	hub        *sync.Hub
-	jwtSecret  string
-	wsUpgrader websocket.Upgrader
+	hub            *sync.Hub
+	jwtSecret      string
+	wsUpgrader     websocket.Upgrader
+	mailer         *email.Mailer
+	googleClientID string
 }
 
 // NewServer constructs a Server with its dependencies injected.
@@ -42,15 +50,12 @@ func NewServer(storage domain.StorageProvider, log *slog.Logger) *Server {
 	return &Server{storage: storage, log: log}
 }
 
-// WithUploads returns a copy of the Server wired with the upload service and
-// permission repository. main.go calls this once the DB is ready.
+// WithUploads wires the upload service and permission repository. main.go calls
+// this once the DB is ready.
 func (s *Server) WithUploads(uploads *service.UploadService, perms *postgresrepo.PermissionRepository) *Server {
-	return &Server{
-		storage: s.storage,
-		log:     s.log,
-		uploads: uploads,
-		perms:   perms,
-	}
+	s.uploads = uploads
+	s.perms = perms
+	return s
 }
 
 // WithRealtime wires the WebSocket hub and JWT secret used to authenticate WS
@@ -66,6 +71,37 @@ func (s *Server) WithRealtime(hub *sync.Hub, jwtSecret string, wsCORSOrigins []s
 // grantee emails to user ids for real-time FILE_SHARED notifications.
 func (s *Server) WithUsers(users *postgresrepo.UserRepository) *Server {
 	s.users = users
+	return s
+}
+
+// WithSessions wires the session repository for active login sessions tracking.
+func (s *Server) WithSessions(sessions *postgresrepo.SessionRepository) *Server {
+	s.sessions = sessions
+	return s
+}
+
+// WithFileOperations wires the file operations service for rename, move,
+// delete, download, and directory listing endpoints.
+func (s *Server) WithFileOperations(fileOps *service.FileService) *Server {
+	s.fileOps = fileOps
+	return s
+}
+
+// WithZipOperations wires the zip service for on-the-fly streaming directories.
+func (s *Server) WithZipOperations(zipOps *service.ZipService) *Server {
+	s.zipOps = zipOps
+	return s
+}
+
+// WithMailer wires the SMTP email mailer.
+func (s *Server) WithMailer(mailer *email.Mailer) *Server {
+	s.mailer = mailer
+	return s
+}
+
+// WithGoogleOAuth wires the Google OAuth Client ID.
+func (s *Server) WithGoogleOAuth(googleClientID string) *Server {
+	s.googleClientID = googleClientID
 	return s
 }
 

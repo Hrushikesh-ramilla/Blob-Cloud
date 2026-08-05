@@ -2,14 +2,17 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { PrivateRoute, GuestRoute } from './routes/PrivateRoute'
 import { Login } from './pages/Login'
 import { Register } from './pages/Register'
+import { Verify } from './pages/Verify'
+import { ForgotPassword } from './pages/ForgotPassword'
+import { ResetPassword } from './pages/ResetPassword'
 import { Dashboard } from './pages/Dashboard'
 
 /**
  * Top-level route tree.
  *
- *   /login, /register  → guest-only (redirect to /dashboard if signed in)
- *   /dashboard          → private (redirect to /login if unauthenticated)
- *   /                   → redirect to /dashboard
+ *   /login, /register, /verify, /forgot-password, /reset-password → guest-only (redirect to /dashboard if signed in)
+ *   /dashboard                                                     → private (redirect to /login if unauthenticated)
+ *   /                                                              → redirect to /dashboard
  */
 export function App() {
   return (
@@ -19,6 +22,9 @@ export function App() {
         <Route element={<GuestRoute />}>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/verify" element={<Verify />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
         </Route>
 
         {/* Protected routes */}

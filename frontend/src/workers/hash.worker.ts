@@ -1,32 +1,35 @@
 /// <reference lib="webworker" />
 
 /**
- * Web Worker: file slicing + SHA-256 hashing.
+ * Web Worker: Bounded concurrency (limit = 3) file slicing + SHA-256 & MD5 hashing.
  *
  * Runs entirely on a background thread so the React main thread never drops
- * frames while processing large files (e.g. 500MB+).
+ * frames while processing large files (e.g. 500MB+ to 10GB+).
  *
- * Protocol:
- *   main → worker : { type: 'hash', file: File }
- *   worker → main : { type: 'progress', progress: number }   (0..100)
- *                   { type: 'complete', chunks: [{sha256, size_bytes}] }
- *                   { type: 'error', error: string }
- *
- * The sliced Blobs are NOT transferred back (they would be copied, doubling
- * memory). Instead the main thread re-slices from the original File when it
- * needs the raw bytes for the S3 PUT — cheap because Blob.slice is lazy.
+ * Bounded Concurrency Semaphore:
+ *   Limits peak memory footprint by processing at most 3 chunk slices in memory
+ *   concurrently, preventing browser RAM exhaustion.
  */
 
 /** Exact chunk size: 4,194,304 bytes (4 MiB). */
 const CHUNK_SIZE = 4 * 1024 * 1024
 
+/** Strict concurrency semaphore ceiling. */
+const CONCURRENCY_LIMIT = 3
+
 /* ---- Typed message contracts (shared with UploadContext) ---- */
+
+export interface ChunkHashResult {
+  sha256: string
+  md5: string // Hex-encoded MD5 hash of the chunk
+  size_bytes: number
+}
 
 export type HashWorkerRequest = { type: 'hash'; file: File }
 
 export type HashWorkerResponse =
   | { type: 'progress'; progress: number }
-  | { type: 'complete'; chunks: { sha256: string; size_bytes: number }[] }
+  | { type: 'complete'; chunks: ChunkHashResult[] }
   | { type: 'error'; error: string }
 
 /* ---- Helpers ---- */
@@ -44,30 +47,147 @@ function bufferToHex(buffer: ArrayBuffer): string {
 }
 
 /**
- * Slice a File into fixed-size chunks and compute the SHA-256 of each using
- * the native Web Crypto API. Reports progress after every chunk.
+ * Pure TypeScript MD5 implementation for ArrayBuffer.
  */
-async function hashFile(file: File): Promise<{ sha256: string; size_bytes: number }[]> {
-  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
-  const chunks: { sha256: string; size_bytes: number }[] = []
+function md5(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  const len = bytes.length
 
-  for (let offset = 0, index = 0; offset < file.size || index === 0; offset += CHUNK_SIZE, index++) {
-    const slice = file.slice(offset, offset + CHUNK_SIZE)
-    const arrayBuffer = await slice.arrayBuffer()
-    const digest = await crypto.subtle.digest('SHA-256', arrayBuffer)
+  const bitLen = len * 8
+  const paddingLen = (len % 64 < 56) ? (56 - (len % 64)) : (120 - (len % 64))
+  const padded = new Uint8Array(len + paddingLen + 8)
+  padded.set(bytes)
+  padded[len] = 0x80
 
-    chunks.push({
-      sha256: bufferToHex(digest),
-      size_bytes: arrayBuffer.byteLength,
-    })
+  const view = new DataView(padded.buffer)
+  view.setUint32(padded.length - 8, bitLen >>> 0, true)
+  view.setUint32(padded.length - 4, Math.floor(bitLen / 0x100000000), true)
 
-    // Report progress as fraction of total chunks hashed.
-    const progress = Math.round(((index + 1) / totalChunks) * 100)
-    const msg: HashWorkerResponse = { type: 'progress', progress }
-    ;(self as unknown as Worker).postMessage(msg)
+  let a0 = 0x67452301
+  let b0 = 0xefcdab89
+  let c0 = 0x98badcfe
+  let d0 = 0x10325476
+
+  const s = [
+    7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,  7, 12, 17, 22,
+    5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,  5,  9, 14, 20,
+    4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,  4, 11, 16, 23,
+    6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21,  6, 10, 15, 21
+  ]
+
+  const K = new Uint32Array(64)
+  for (let i = 0; i < 64; i++) {
+    K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296) >>> 0
   }
 
-  return chunks
+  for (let i = 0; i < padded.length; i += 64) {
+    let A = a0, B = b0, C = c0, D = d0
+    const M = new Uint32Array(16)
+    for (let j = 0; j < 16; j++) {
+      M[j] = view.getUint32(i + j * 4, true)
+    }
+
+    for (let j = 0; j < 64; j++) {
+      let F = 0
+      let g = 0
+      if (j < 16) {
+        F = (B & C) | ((~B) & D)
+        g = j
+      } else if (j < 32) {
+        F = (D & B) | ((~D) & C)
+        g = (5 * j + 1) % 16
+      } else if (j < 48) {
+        F = B ^ C ^ D
+        g = (3 * j + 5) % 16
+      } else {
+        F = C ^ (B | (~D))
+        g = (7 * j) % 16
+      }
+
+      const temp = D
+      D = C
+      C = B
+      const sum = (A + F + K[j] + M[g]) >>> 0
+      const rot = (sum << s[j]) | (sum >>> (32 - s[j]))
+      B = (B + rot) >>> 0
+      A = temp
+    }
+
+    a0 = (a0 + A) >>> 0
+    b0 = (b0 + B) >>> 0
+    c0 = (c0 + C) >>> 0
+    d0 = (d0 + D) >>> 0
+  }
+
+  const hex32 = (n: number) => {
+    let str = ''
+    for (let j = 0; j < 4; j++) {
+      str += ((n >> (j * 8)) & 0xff).toString(16).padStart(2, '0')
+    }
+    return str
+  }
+
+  return hex32(a0) + hex32(b0) + hex32(c0) + hex32(d0)
+}
+
+/**
+ * Slice a File into fixed-size chunks and compute SHA-256 + MD5 hashes using
+ * a Bounded Concurrency Semaphore (max 3 concurrent chunk operations).
+ */
+async function hashFileBounded(file: File): Promise<ChunkHashResult[]> {
+  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE))
+  const results: ChunkHashResult[] = new Array(totalChunks)
+
+  let nextIndex = 0
+  let completedCount = 0
+
+  return new Promise<ChunkHashResult[]>((resolve, reject) => {
+    const processNext = async () => {
+      if (completedCount === totalChunks) {
+        resolve(results)
+        return
+      }
+
+      while (nextIndex < totalChunks) {
+        const index = nextIndex++
+        const offset = index * CHUNK_SIZE
+
+        try {
+          const slice = file.slice(offset, Math.min(file.size, offset + CHUNK_SIZE))
+          const arrayBuffer = await slice.arrayBuffer()
+
+          const sha256Digest = await crypto.subtle.digest('SHA-256', arrayBuffer)
+          const sha256Hex = bufferToHex(sha256Digest)
+          const md5Hex = md5(arrayBuffer)
+
+          results[index] = {
+            sha256: sha256Hex,
+            md5: md5Hex,
+            size_bytes: arrayBuffer.byteLength,
+          }
+
+          completedCount++
+          const progress = Math.round((completedCount / totalChunks) * 100)
+          const msg: HashWorkerResponse = { type: 'progress', progress }
+          ;(self as unknown as Worker).postMessage(msg)
+
+          if (completedCount === totalChunks) {
+            resolve(results)
+            return
+          }
+        } catch (err) {
+          reject(err)
+          return
+        }
+      }
+    }
+
+    // Launch up to CONCURRENCY_LIMIT (3) parallel task runners
+    const initialRunners = Math.min(CONCURRENCY_LIMIT, totalChunks)
+    for (let i = 0; i < initialRunners; i++) {
+      void processNext()
+    }
+  })
 }
 
 /* ---- Worker entry point ---- */
@@ -82,7 +202,7 @@ self.onmessage = async (e: MessageEvent<HashWorkerRequest>) => {
   }
 
   try {
-    const chunks = await hashFile(file)
+    const chunks = await hashFileBounded(file)
     const msg: HashWorkerResponse = { type: 'complete', chunks }
     ;(self as unknown as Worker).postMessage(msg)
   } catch (err) {

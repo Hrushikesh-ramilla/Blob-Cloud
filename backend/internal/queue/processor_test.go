@@ -88,6 +88,37 @@ func (m *memStorage) GetObject(_ context.Context, key string) (io.ReadCloser, er
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
+
+func (m *memStorage) GetObjectRange(_ context.Context, key string, offset, length int64) (io.ReadCloser, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	b, ok := m.objects[key]
+	if !ok {
+		return nil, errors.New("object not found: " + key)
+	}
+	if offset < 0 || offset > int64(len(b)) {
+		return nil, errors.New("offset out of bounds")
+	}
+	sub := b[offset:]
+	if length >= 0 && length < int64(len(sub)) {
+		sub = sub[:length]
+	}
+	return io.NopCloser(bytes.NewReader(sub)), nil
+}
+func (m *memStorage) HeadObject(_ context.Context, key string) (*domain.ObjectMetadata, error) {
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	b, ok := m.objects[key]
+	if !ok {
+		return nil, errors.New("object not found: " + key)
+	}
+	return &domain.ObjectMetadata{
+		ContentLength: int64(len(b)),
+		ETag:          "mocketag",
+	}, nil
+}
 func (m *memStorage) DeleteObject(_ context.Context, key string) error {
 	delete(m.objects, key)
 	return nil

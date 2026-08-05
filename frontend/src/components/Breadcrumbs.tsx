@@ -12,33 +12,20 @@ interface BreadcrumbsProps {
  */
 export function Breadcrumbs({ nodes, onNavigate }: BreadcrumbsProps) {
   return (
-    <nav aria-label="Directory breadcrumbs" className="flex items-center gap-1 overflow-x-auto text-sm whitespace-nowrap">
+    <nav aria-label="Directory breadcrumbs" className="flex items-center gap-1.5 overflow-x-auto text-xs whitespace-nowrap select-none font-mono">
       {nodes.map((node, i) => {
         const isLast = i === nodes.length - 1
         return (
-          <span key={`${node.id}-${i}`} className="flex items-center gap-1">
+          <span key={`${node.id}-${i}`} className="flex items-center gap-1.5">
             {i > 0 && (
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-zinc-600"
-                aria-hidden="true"
-              >
-                <polyline points="9,6 15,12 9,18" />
-              </svg>
+              <span className="text-zinc-600 font-bold text-[11px] select-none">/</span>
             )}
             {isLast ? (
-              <span className="font-medium text-zinc-50">{node.name}</span>
+              <span className="font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-xs">{node.name}</span>
             ) : (
               <button
                 onClick={() => onNavigate(i)}
-                className="rounded px-1 py-0.5 text-zinc-400 transition-colors hover:bg-zinc-900 hover:text-zinc-200"
+                className="rounded px-1.5 py-0.5 text-zinc-400 font-medium transition-colors hover:bg-arch-850 hover:text-zinc-100"
                 aria-label={`Navigate to ${node.name}`}
               >
                 {node.name}

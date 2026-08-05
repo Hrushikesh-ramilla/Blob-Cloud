@@ -28,6 +28,7 @@ var validRoles = map[string]struct{}{
 //
 // Grants a role on a file/folder to a user (by email). A duplicate grant on the
 // same (file, email) is rejected by the unique constraint and surfaced as 409.
+// Requires OWNER or EDITOR permission on the file.
 func (s *Server) HandleShare(w http.ResponseWriter, r *http.Request) {
 	if s.perms == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -35,6 +36,13 @@ func (s *Server) HandleShare(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	_, code, msg := s.userFromBearer(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
 	fileID := chi.URLParam(r, "id")
 	if fileID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing file id"})
@@ -61,30 +69,37 @@ func (s *Server) HandleShare(w http.ResponseWriter, r *http.Request) {
 		Role:         req.Role,
 	}
 	if err := s.perms.GrantPermission(r.Context(), perm); err != nil {
-			// Unique violation (duplicate grant) -> 409 Conflict.
-			if isUniqueViolation(err) {
-				writeJSON(w, http.StatusConflict, map[string]string{
-					"error": "permission already granted to " + req.GranteeEmail,
-				})
-				return
-			}
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		// Unique violation (duplicate grant) -> 409 Conflict.
+		if isUniqueViolation(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "permission already granted to " + req.GranteeEmail,
+			})
 			return
 		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
 
-		// Notify the grantee in real-time so their UI refreshes without polling.
-		if s.hub != nil && s.users != nil {
-			if grantee, err := s.users.GetByEmail(r.Context(), req.GranteeEmail); err == nil {
-				s.hub.NotifyUser(grantee.ID, wsSync.NotificationEvent{
-					Type: wsSync.EventFileShared,
-					Payload: map[string]string{
-						"file_id":   fileID,
-						"filename":  perm.GranteeEmail, // resolved on client via GET /files
-						"shared_by": "a collaborator",
-					},
-				})
+	// Notify the grantee in real-time so their UI refreshes without polling.
+	if s.hub != nil && s.users != nil {
+		if grantee, err := s.users.GetByEmail(r.Context(), req.GranteeEmail); err == nil {
+			// Resolve the actual filename for the notification payload.
+			filename := fileID // fallback to file id if lookup fails
+			if s.fileOps != nil {
+				if file, _, fErr := s.fileOps.GetDownloadInfo(r.Context(), fileID); fErr == nil {
+					filename = file.Name
+				}
 			}
+			s.hub.NotifyUser(grantee.ID, wsSync.NotificationEvent{
+				Type: wsSync.EventFileShared,
+				Payload: map[string]string{
+					"file_id":   fileID,
+					"filename":  filename,
+					"shared_by": "a collaborator",
+				},
+			})
 		}
+	}
 
 	writeJSON(w, http.StatusCreated, perm)
 }
@@ -92,6 +107,7 @@ func (s *Server) HandleShare(w http.ResponseWriter, r *http.Request) {
 // HandleListPermissions implements GET /api/files/{id}/permissions.
 //
 // Lists the direct grants on a file (does not walk the folder hierarchy).
+// Requires authentication.
 func (s *Server) HandleListPermissions(w http.ResponseWriter, r *http.Request) {
 	if s.perms == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
@@ -99,6 +115,13 @@ func (s *Server) HandleListPermissions(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	_, code, msg := s.userFromBearer(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
 	fileID := chi.URLParam(r, "id")
 	if fileID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing file id"})

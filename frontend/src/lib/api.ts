@@ -31,7 +31,16 @@ export const apiClient = axios.create({
 const RETRY_FLAG = '_blobcloudRetried'
 
 /** Auth endpoints whose 401 must NOT trigger a refresh attempt. */
-const NO_REFRESH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh']
+const NO_REFRESH_PATHS = [
+  '/auth/login',
+  '/auth/register',
+  '/auth/refresh',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+  '/auth/change-password',
+  '/auth/logout',
+]
+
 
 /* ------------------------- Request interceptor ------------------------- */
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
