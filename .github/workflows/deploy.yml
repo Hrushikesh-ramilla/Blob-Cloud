@@ -68,6 +68,8 @@ jobs:
       run: |
         cd frontend
         npm ci
+        echo "VITE_API_BASE=/api" > .env
+        echo "VITE_GOOGLE_CLIENT_ID=689293277515-joa972q2s6asi87k7h4ggf5pctlndhmq.apps.googleusercontent.com" >> .env
         npm run build
 
     # --- Transfer Files to EC2 ---
