@@ -43,19 +43,21 @@ export function ListView({
       {items.length === 0 ? (
         <EmptyState />
       ) : (
-        <table className="w-full text-xs" role="grid">
+        <table className="w-full text-[11px] table-fixed" role="grid">
           <thead>
-            <tr className="border-b border-arch-border bg-arch-950 text-left font-mono text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">
-              <th className="px-3 py-2.5 w-10">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={onSelectAll}
-                  className="h-3.5 w-3.5 rounded-xs border-arch-700 bg-arch-950 text-amber-500 focus:ring-amber-500/40"
-                  aria-label="Select all items"
-                />
+            <tr className="border-b border-arch-border bg-arch-950 text-left font-mono text-[9px] font-semibold uppercase tracking-[0.15em] text-zinc-500">
+              <th className="pl-4 pr-1 py-2.5 w-10">
+                {(selectedIds?.size ?? 0) > 0 && (
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={onSelectAll}
+                    className="h-3.5 w-3.5 rounded-xs border-arch-700 bg-arch-950 text-amber-500 focus:ring-amber-500/40"
+                    aria-label="Select all items"
+                  />
+                )}
               </th>
-              <th className={cn('px-4 py-2.5', isTrash ? 'w-[35%]' : 'w-[55%]')}>NAME</th>
+              <th className="pl-0 pr-4 py-2.5 w-full">NAME</th>
               {isTrash && <th className="px-4 py-2.5 w-[20%]">ORIGINAL LOCATION</th>}
               <th className="px-4 py-2.5 w-[20%]">{isTrash ? 'DATE DELETED' : isShared ? 'DATE SHARED' : 'DATE MODIFIED'}</th>
               {isTrash && <th className="px-4 py-2.5 w-[10%]">ITEMS</th>}
@@ -144,7 +146,7 @@ function Row({
       aria-label={item.name}
     >
       {/* Checkbox */}
-      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+      <td className="pl-4 pr-1 py-2 w-10" onClick={(e) => e.stopPropagation()}>
         <input
           type="checkbox"
           checked={isSelected}
@@ -155,12 +157,12 @@ function Row({
       </td>
 
       {/* Name */}
-      <td className="px-4 py-2">
-        <div className="flex items-center gap-2.5">
-          <FileThumb thumbnailUrl={item.thumbnail_url} iconVariant={icon} iconSize={16} layout="row" />
-          <span className="truncate text-zinc-200 font-medium group-hover:text-white">{item.name}</span>
+      <td className="pl-0 pr-4 py-2 w-full max-w-[200px] sm:max-w-[300px] md:max-w-[400px]">
+        <div className="flex items-center gap-2 overflow-hidden">
+          <FileThumb iconVariant={icon} iconSize={16} layout="row" />
+          <span className="truncate text-zinc-200 font-medium text-sm group-hover:text-white" title={item.name}>{item.name}</span>
           {item.is_directory && (
-            <span className="font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400/80 bg-amber-500/10 border border-amber-500/20 px-1 py-0.2 rounded-xs">
+            <span className="font-mono text-[9px] font-semibold uppercase tracking-wider text-amber-400/80 bg-amber-500/10 border border-amber-500/20 px-1 py-0.2 rounded-xs flex-shrink-0">
               DIR
             </span>
           )}
@@ -169,13 +171,13 @@ function Row({
 
       {/* Original Location (Trash view) */}
       {isTrash && (
-        <td className="px-4 py-2 font-mono text-zinc-400 truncate text-[11px]">
+        <td className="px-4 py-2 font-mono text-zinc-400 truncate text-[10px]">
           {item.original_location ?? 'My Drive'}
         </td>
       )}
 
       {/* Date */}
-      <td className="px-4 py-2 font-mono text-zinc-400 text-[11px]">
+      <td className="px-4 py-2 font-mono text-zinc-400 text-xs">
         {item.shared_at
           ? formatDate(item.shared_at)
           : formatDate((isTrash && item.deleted_at) ? item.deleted_at : item.updated_at)}
@@ -183,13 +185,13 @@ function Row({
 
       {/* Items Count (Trash view) */}
       {isTrash && (
-        <td className="px-4 py-2 font-mono text-zinc-400 text-[11px]">
+        <td className="px-4 py-2 font-mono text-zinc-400 text-[10px]">
           {item.is_directory ? (item.item_count ?? 0) : '—'}
         </td>
       )}
 
       {/* Size */}
-      <td className="px-4 py-2 font-mono text-zinc-400 text-[11px]">
+      <td className="px-4 py-2 font-mono text-zinc-400 text-xs">
         {item.is_directory
           ? isTrash && item.aggregate_size !== undefined
             ? formatFileSize(item.aggregate_size)

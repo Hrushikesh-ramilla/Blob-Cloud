@@ -292,6 +292,48 @@ func (s *Server) HandleListTrash(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/files/{id}/thumbnail
+// ---------------------------------------------------------------------------
+
+// HandleGetThumbnail implements GET /api/files/{id}/thumbnail.
+func (s *Server) HandleGetThumbnail(w http.ResponseWriter, r *http.Request) {
+	userID, code, msg := s.userFromQueryToken(r)
+	if code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if fileID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing file id"})
+		return
+	}
+
+	if err := s.fileOps.AuthoriseRead(r.Context(), userID, fileID); err != nil {
+		status := http.StatusForbidden
+		if strings.Contains(err.Error(), "not found") || errors.Is(err, sql.ErrNoRows) {
+			status = http.StatusNotFound
+		}
+		writeJSON(w, status, map[string]string{"error": "access denied or not found"})
+		return
+	}
+
+	thumbKey := fmt.Sprintf("thumbnails/%s.png", fileID)
+	rc, err := s.storage.GetObject(r.Context(), thumbKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "thumbnail not found"})
+		return
+	}
+	defer rc.Close()
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if _, err := io.Copy(w, rc); err != nil {
+		s.log.Error("failed to stream thumbnail", "file_id", fileID, "err", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/files/{id}/download
 // ---------------------------------------------------------------------------
 

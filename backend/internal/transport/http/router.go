@@ -92,6 +92,7 @@ func NewRouter(s *Server) http.Handler {
 		r.Post("/{id}/restore", s.HandleRestore)
 		r.Delete("/{id}/permanent", s.HandlePermanentDelete)
 		r.Get("/{id}/download", s.HandleDownload)
+		r.Get("/{id}/thumbnail", s.HandleGetThumbnail)
 	})
 
 	// --- Phase 6: real-time notifications (WebSocket) ---

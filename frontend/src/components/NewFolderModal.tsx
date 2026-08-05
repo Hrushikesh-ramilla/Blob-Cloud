@@ -11,6 +11,7 @@ import { apiClient } from '../lib/api'
 import { Button } from './ui/Button'
 import { Input } from './ui/Input'
 import { Alert } from './ui/Alert'
+import { XIcon } from './icons'
 import type { FileItem } from '../types/file'
 
 interface NewFolderModalProps {
@@ -137,7 +138,9 @@ export function NewFolderModal({ open, onClose, parentId, onCreated }: NewFolder
         {/* Header */}
         <div className="flex items-center justify-between border-b border-arch-border pb-3 mb-4">
           <h2 className="font-display text-sm font-bold text-zinc-100">CREATE NEW FOLDER</h2>
-          <span className="key-badge">ESC</span>
+          <button type="button" onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-arch-850 hover:text-zinc-200 transition-colors" aria-label="Close dialog">
+            <XIcon size={16} />
+          </button>
         </div>
 
         {/* Server error */}

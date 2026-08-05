@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useUpload } from '../context/UploadContext'
 import { formatFileSize, cn } from '../lib/format'
 import { Spinner } from './ui/Spinner'
@@ -13,14 +13,23 @@ export function UploadQueue() {
   const { jobs, clearCompleted } = useUpload()
   const [collapsed, setCollapsed] = useState(false)
 
-  // Don't render anything when there are no jobs.
-  if (jobs.length === 0) return null
-
   const activeCount = jobs.filter((j) => !isTerminal(j.status)).length
+  const allTerminal = jobs.length > 0 && activeCount === 0
+
+  useEffect(() => {
+    if (allTerminal) {
+      const timer = setTimeout(() => {
+        clearCompleted()
+      }, 2500) // Disappear fast
+      return () => clearTimeout(timer)
+    }
+  }, [allTerminal, clearCompleted])
+
+  if (jobs.length === 0) return null
 
   return (
     <div
-      className="fixed top-20 right-6 z-50 w-80 animate-fade-in font-sans select-none"
+      className="fixed top-20 right-6 z-50 w-72 animate-fade-in font-sans select-none"
       role="region"
       aria-label="Upload queue"
     >

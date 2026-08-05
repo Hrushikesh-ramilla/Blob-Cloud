@@ -1,4 +1,4 @@
-import { format, formatDistanceToNow } from 'date-fns'
+import { format } from 'date-fns'
 
 /**
  * Format a byte count into a human-readable string.
@@ -26,12 +26,17 @@ export function formatDate(iso: string): string {
   try {
     const date = new Date(iso)
     const now = Date.now()
-    const diffMs = now - date.getTime()
-    const sevenDays = 7 * 24 * 60 * 60 * 1000
+    const diffMs = Math.max(0, now - date.getTime())
+    
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMins / 60)
+    const diffDays = Math.floor(diffHours / 24)
 
-    if (diffMs < sevenDays && diffMs >= 0) {
-      return formatDistanceToNow(date, { addSuffix: true })
-    }
+    if (diffMins < 1) return 'just now'
+    if (diffMins < 60) return `${diffMins} min${diffMins === 1 ? '' : 's'} ago`
+    if (diffHours < 24) return `${diffHours} hr${diffHours === 1 ? '' : 's'} ago`
+    if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
+
     return format(date, 'MMM d, yyyy')
   } catch {
     return '—'

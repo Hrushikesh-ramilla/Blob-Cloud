@@ -227,16 +227,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-zinc-500">
-                    Active Device Sessions ({sessions.length})
+                    Active Device Sessions
                   </h3>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 flex items-center justify-between dark:border-zinc-800 dark:bg-zinc-900/60">
                   <div>
                     <div className="flex items-center gap-2">
                       <p className="text-sm font-semibold text-slate-900 dark:text-zinc-100">Device Management</p>
-                      <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
-                        {sessions.length} {sessions.length === 1 ? 'Session' : 'Sessions'} Active
-                      </span>
                     </div>
                     <p className="text-xs text-slate-500 dark:text-zinc-400 mt-0.5">
                       Review all devices and IP addresses logged into your account

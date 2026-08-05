@@ -111,7 +111,7 @@ func (p *ThumbnailProcessor) ProcessMessage(ctx context.Context, msg ThumbnailMe
 			Type: wsSync.EventThumbnailReady,
 			Payload: map[string]string{
 				"file_id":       msg.FileID,
-				"thumbnail_url": thumbKey,
+				"thumbnail_url": fmt.Sprintf("/api/files/%s/thumbnail", msg.FileID),
 			},
 		})
 	}

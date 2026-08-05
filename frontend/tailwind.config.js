@@ -9,12 +9,12 @@ export default {
       colors: {
         // High-contrast, bespoke slate palette
         arch: {
-          950: '#090a0c', // main canvas
-          900: '#111317', // surface / panel
-          850: '#15181e', // elevated card
-          800: '#1c2029', // structural card hover
-          700: '#282e3b', // border / outline
-          border: '#242830', // sharp 1px dividers
+          950: '#090a0b', // main canvas (zinc-950)
+          900: '#18181b', // surface / panel (zinc-900)
+          850: '#27272a', // elevated card (zinc-800)
+          800: '#3f3f46', // structural card hover (zinc-700)
+          700: '#52525b', // border / outline (zinc-600)
+          border: '#27272a', // sharp dividers (zinc-800)
         },
         // Intentional sharp accent color (Electric Amber)
         amber: {

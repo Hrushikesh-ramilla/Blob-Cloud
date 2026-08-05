@@ -58,7 +58,9 @@ export function Dashboard() {
   ])
   const [items, setItems] = useState<FileItem[]>([])
   const [isTrashContext, setIsTrashContext] = useState(false)
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    return (localStorage.getItem('blobcloud_view_mode') as 'grid' | 'list') || 'grid'
+  })
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -190,7 +192,17 @@ export function Dashboard() {
 
       // Sort: directories first, then alphabetical by name
       const rawData = Array.isArray(res.data) ? res.data : []
-      const sorted = rawData.sort((a, b) => {
+      const token = getAccessToken() || ''
+      const sorted = rawData.map(item => {
+        const isImage = /\.(jpg|jpeg|png|webp|gif)$/i.test(item.name)
+        if (isImage && !item.thumbnail_url) {
+          return {
+             ...item,
+             thumbnail_url: `${apiClient.defaults.baseURL}/files/${item.id}/thumbnail?token=${token}`
+          }
+        }
+        return item
+      }).sort((a, b) => {
         if (a.is_directory !== b.is_directory) return a.is_directory ? -1 : 1
         return a.name.localeCompare(b.name)
       })
@@ -290,9 +302,13 @@ export function Dashboard() {
     console.info('[dashboard] folder created:', folder.name)
   }, [])
 
-  // ---- View mode toggle ----
+  /** Toggle Grid/List layout */
   const handleViewModeToggle = useCallback(() => {
-    setViewMode((prev) => (prev === 'list' ? 'grid' : 'list'))
+    setViewMode((prev) => {
+      const next = prev === 'list' ? 'grid' : 'list'
+      localStorage.setItem('blobcloud_view_mode', next)
+      return next
+    })
   }, [])
 
   /* ----------------------- Phase 7.5: real-time sync ----------------------- */
@@ -323,8 +339,13 @@ export function Dashboard() {
 
   /** Merge a thumbnail URL into the matching item, causing an instant icon→image swap. */
   const applyThumbnail = useCallback((fileId: string, thumbnailUrl: string) => {
+    const token = getAccessToken() || ''
+    const fullUrl = thumbnailUrl.includes('token=') 
+      ? thumbnailUrl 
+      : `${apiClient.defaults.baseURL}${thumbnailUrl.replace('/api/files', '/files')}?token=${token}`
+      
     setItems((prev) =>
-      prev.map((it) => (it.id === fileId ? { ...it, thumbnail_url: thumbnailUrl } : it)),
+      prev.map((it) => (it.id === fileId ? { ...it, thumbnail_url: fullUrl } : it)),
     )
   }, [])
 

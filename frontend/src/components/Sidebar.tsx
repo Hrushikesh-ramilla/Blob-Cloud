@@ -159,7 +159,7 @@ export function Sidebar({
     <aside
       className={cn(
         'flex h-full flex-col border-r border-arch-border bg-arch-900 transition-all duration-200 select-none',
-        collapsed ? 'w-16' : 'w-64',
+        collapsed ? 'w-16' : 'w-48',
       )}
       aria-label="Sidebar navigation"
     >
@@ -219,16 +219,6 @@ export function Sidebar({
           >
             <button
               role="menuitem"
-              onClick={() => { onNewFolder(); setDropdownOpen(false) }}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-[#242830] hover:text-white"
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true">
-                <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-              </svg>
-              New Folder
-            </button>
-            <button
-              role="menuitem"
               onClick={() => { onUploadFile(); setDropdownOpen(false) }}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-[#242830] hover:text-white"
             >
@@ -248,6 +238,16 @@ export function Sidebar({
                 <path d="M12 11v6M9 14l3-3 3 3" />
               </svg>
               Upload Folder
+            </button>
+            <button
+              role="menuitem"
+              onClick={() => { onNewFolder(); setDropdownOpen(false) }}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-[#242830] hover:text-white"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true">
+                <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+              </svg>
+              New Folder
             </button>
           </div>
         )}
