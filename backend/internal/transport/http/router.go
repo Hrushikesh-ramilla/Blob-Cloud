@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"go-drive-clone/internal/metrics"
 )
 
 // corsMiddleware allows the browser frontend (served on a different origin/port
@@ -35,6 +36,10 @@ func NewRouter(s *Server) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware)
+	r.Use(metrics.PrometheusMiddleware)
+
+	// Prometheus metrics endpoint — not behind auth, accessed by scraper only.
+	r.Get("/metrics", metrics.Handler().ServeHTTP)
 
 	// --- Phase 1: storage simulation + health ---
 	r.Get("/health", s.HandleHealth)

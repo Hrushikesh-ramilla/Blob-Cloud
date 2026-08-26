@@ -20,6 +20,7 @@ import (
 	"go-drive-clone/internal/database"
 	"go-drive-clone/internal/domain"
 	"go-drive-clone/internal/email"
+	"go-drive-clone/internal/metrics"
 	postgresrepo "go-drive-clone/internal/repository/postgres"
 	"go-drive-clone/internal/queue"
 	wsSync "go-drive-clone/internal/sync"
@@ -49,6 +50,10 @@ func main() {
 	}
 
 	log := newLogger(cfg.ENV)
+
+	// Register all Prometheus metrics with the private registry before the
+	// HTTP server starts accepting requests.
+	metrics.Init()
 
 	log.Info("starting go-drive-clone",
 		"env", cfg.ENV,

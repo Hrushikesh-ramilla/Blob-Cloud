@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go-drive-clone/internal/domain"
+	"go-drive-clone/internal/metrics"
 	postgresrepo "go-drive-clone/internal/repository/postgres"
 	"go-drive-clone/internal/queue"
 	wsSync "go-drive-clone/internal/sync"
@@ -125,6 +126,14 @@ func (s *UploadService) Initiate(ctx context.Context, req InitiateRequest) (*Ini
 	for _, b := range existing {
 		existingSet[b.SHA256] = true
 	}
+
+	// Record deduplication metrics: hits = blocks already stored (client skips
+	// uploading them), misses = blocks that need a fresh upload URL.
+	dedupHits := float64(len(existing))
+	dedupMisses := float64(len(hashes) - len(existing))
+	metrics.BlockDedupHits.Add(dedupHits)
+	metrics.BlockDedupMisses.Add(dedupMisses)
+	metrics.UploadsInitiated.Inc()
 
 	// 2. Build the session + its blocks. Pre-existing chunks are marked
 	//    is_uploaded=true so completion won't expect a fresh upload.
@@ -369,6 +378,7 @@ func (s *UploadService) Complete(ctx context.Context, req CompleteRequest, userI
 	}
 
 	s.log.Info("upload completed", "session_id", req.SessionID, "file_id", result.FileID)
+	metrics.UploadsCompleted.Inc()
 
 	// Publish a thumbnail job to the event queue. Failure to publish is
 	// non-fatal — the upload succeeded, the thumbnail will just be missed.
