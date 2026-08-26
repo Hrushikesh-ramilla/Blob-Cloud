@@ -193,3 +193,29 @@ func (r *BlockRepository) LinkBlocksToFile(ctx context.Context, fileID string, b
 		return nil
 	})
 }
+
+// AllBlockHashes returns every sha256 hash currently registered in the blocks
+// table. Used exclusively by the GC to build the "known-good" set against
+// which storage keys are compared.
+//
+// Implementation note: we stream rows with QueryContext rather than loading
+// all into a slice first, which keeps memory bounded for large datasets
+// (millions of blocks). The caller is responsible for draining promptly.
+func (r *BlockRepository) AllBlockHashes(ctx context.Context) ([]string, error) {
+	const q = `SELECT sha256 FROM blocks ORDER BY sha256`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("query all block hashes: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("scan block hash: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}

@@ -236,3 +236,32 @@ func rewriteHost(rawURL, cdnDomain string) string {
 	}
 	return u.String()
 }
+
+// ListBlockKeys paginates through ListObjectsV2 for the "blocks/" prefix and
+// returns every key it finds. The GC uses this to enumerate physical objects
+// that may not be referenced in the Postgres blocks table (orphans).
+func (s *S3Storage) ListBlockKeys(ctx context.Context) ([]string, error) {
+	var keys []string
+	var continuationToken *string
+
+	for {
+		out, err := s.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(s.bucket),
+			Prefix:            aws.String(s3BlockPrefix + "/"),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list s3 block objects: %w", err)
+		}
+		for _, obj := range out.Contents {
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
+			}
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated {
+			break
+		}
+		continuationToken = out.NextContinuationToken
+	}
+	return keys, nil
+}

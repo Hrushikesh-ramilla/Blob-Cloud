@@ -181,3 +181,26 @@ func (s *LocalStore) keyToPath(key string) string {
 	// Trim the leading separator that Clean prepended so Join stays in baseDir.
 	return filepath.Join(s.baseDir, cleaned[len(string(os.PathSeparator)):])
 }
+
+// ListBlockKeys enumerates every file stored under the blocks/ sub-directory
+// and returns their keys in "blocks/<sha256>" form. It satisfies the
+// gc.BlockLister interface so the GC can run against local storage in
+// development without needing a real S3 bucket.
+func (s *LocalStore) ListBlockKeys(_ context.Context) ([]string, error) {
+	dir := filepath.Join(s.baseDir, BlockPrefix)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // blocks/ not yet created — nothing to collect
+		}
+		return nil, fmt.Errorf("list local block dir: %w", err)
+	}
+	keys := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue // blocks are always flat files — skip any stray sub-dirs
+		}
+		keys = append(keys, BlockPrefix+"/"+e.Name())
+	}
+	return keys, nil
+}
