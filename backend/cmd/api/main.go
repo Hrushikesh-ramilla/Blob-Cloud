@@ -21,6 +21,7 @@ import (
 	"go-drive-clone/internal/domain"
 	"go-drive-clone/internal/email"
 	"go-drive-clone/internal/metrics"
+	"go-drive-clone/internal/ratelimit"
 	postgresrepo "go-drive-clone/internal/repository/postgres"
 	"go-drive-clone/internal/queue"
 	wsSync "go-drive-clone/internal/sync"
@@ -220,7 +221,23 @@ func main() {
 		}
 	}
 
-	router := httpx.NewRouter(srv)
+	// Build rate limiters from config. In-memory by default; for multi-node
+	// deployments swap to ratelimit.NewRedisLimiter using the same Redis client
+	// wired for the backplane.
+	rl := httpx.RateLimiters{}
+	if cfg.RateLimitAuthPerMin > 0 {
+		rl.Auth = ratelimit.NewInMemoryLimiter(cfg.RateLimitAuthPerMin, time.Minute)
+		rl.AuthCfg = ratelimit.NewZoneConfig(cfg.RateLimitAuthPerMin, time.Minute)
+	}
+	if cfg.RateLimitUploadPerMin > 0 {
+		rl.Upload = ratelimit.NewInMemoryLimiter(cfg.RateLimitUploadPerMin, time.Minute)
+		rl.UploadCfg = ratelimit.NewZoneConfig(cfg.RateLimitUploadPerMin, time.Minute)
+	}
+	if cfg.RateLimitAPIPerMin > 0 {
+		rl.API = ratelimit.NewInMemoryLimiter(cfg.RateLimitAPIPerMin, time.Minute)
+		rl.APICfg = ratelimit.NewZoneConfig(cfg.RateLimitAPIPerMin, time.Minute)
+	}
+	router := httpx.NewRouter(srv, rl)
 
 	httpServer := &http.Server{
 		Addr:              ":" + strconv.Itoa(cfg.Port),
