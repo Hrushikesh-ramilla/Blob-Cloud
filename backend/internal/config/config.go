@@ -63,6 +63,13 @@ type Config struct {
 	// WSCORSOrigins is a comma-separated list of origins allowed to open WS
 	// connections (CORS check for the WebSocket handshake). "*" allows all.
 	WSCORSOrigins []string
+
+	// --- Realtime backplane (Tier 2D) ---
+	// RedisURL is the connection URL for the Redis Pub/Sub backplane that allows
+	// WebSocket events to be routed across multiple API server instances behind a
+	// load balancer. Format: redis://[:password@]host:port[/db]
+	// Leave empty (default) to run in single-node mode (Hub only, no Redis).
+	RedisURL string
 }
 
 // Load reads configuration from environment variables, applying defaults for
@@ -121,6 +128,9 @@ func Load() (Config, error) {
 		// --- Auth / realtime (Phase 6) ---
 		JWTSecret:     envStr("JWT_SECRET", ""),
 		WSCORSOrigins: envList("WS_CORS_ORIGINS", []string{"*"}),
+
+		// --- Realtime backplane (Tier 2D) ---
+		RedisURL: envStr("REDIS_URL", ""),
 	}, nil
 }
 
