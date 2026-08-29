@@ -174,6 +174,8 @@ func main() {
 			sessions := postgresrepo.NewUploadSessionRepository(db)
 			perms := postgresrepo.NewPermissionRepository(db)
 			userSessions := postgresrepo.NewSessionRepository(db)
+			auditRepo := postgresrepo.NewAuditRepository(db, log)
+			srv = srv.WithAudit(auditRepo)
 
 
 			// notifier is set in the hub/backplane block above:

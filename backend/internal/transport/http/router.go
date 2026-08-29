@@ -123,6 +123,7 @@ func NewRouter(s *Server, rl RateLimiters) http.Handler {
 			r.Delete("/{id}/permanent", s.HandlePermanentDelete)
 			r.Get("/{id}/download", s.HandleDownload)
 			r.Get("/{id}/thumbnail", s.HandleGetThumbnail)
+			r.Get("/{id}/history", s.HandleFileHistory)   // Tier 2F: audit trail
 		})
 
 		// --- Phase 6: real-time notifications (WebSocket) ---
