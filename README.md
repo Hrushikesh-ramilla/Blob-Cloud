@@ -1,125 +1,178 @@
- 
 # Blob-Cloud
 
-[![Go Version](https://img.shields.io/github/go-mod/go-version/yourusername/blob-cloud?filename=backend%2Fgo.mod)](https://golang.org)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/Hrushikesh-ramilla/Blob-Cloud?filename=backend%2Fgo.mod)](https://golang.org)
 [![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)](https://react.dev)
 [![AWS](https://img.shields.io/badge/AWS-%23FF9900.svg?style=flat&logo=amazon-aws&logoColor=white)](https://aws.amazon.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Redis](https://img.shields.io/badge/Redis-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io)
+[![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=flat&logo=Cloudflare&logoColor=white)](https://workers.cloudflare.com)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Blob-Cloud is a high-performance, cloud-native file storage and collaboration platform (Google Drive clone) designed for secure, resilient, and highly optimized operations. The system is architected as a modular monolith in **Go**, utilizing a modern **React** frontend, and designed to run entirely within the **AWS Free Tier** limits (or Cloudflare R2 for zero egress fees).
-
-Rather than routing heavy file traffic through our Go server, this project implements a **direct-to-cloud storage pipeline** with **global block-level deduplication** and an **asynchronous event-driven worker architecture**.
+Blob-Cloud is a production-grade, cloud-native file storage and collaboration platform built in **Go** with a **React** frontend. It targets AWS Free Tier (or Cloudflare R2 for zero egress fees) and implements a direct-to-cloud upload pipeline with global block-level deduplication, real-time WebSocket notifications, horizontal scalability via Redis Pub/Sub, per-zone HTTP rate limiting, an immutable audit trail, and cryptographic edge integrity validation.
 
 ---
 
-## 🛠️ System Architecture
-
-The following diagram illustrates how file uploads, metadata tracking, deduplication, and background jobs interact seamlessly across the stack, bypassing the Go API gateway for data transfers:
+## System Architecture
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Client as React Frontend
+    participant CF as Cloudflare Worker (Edge Validator)
     participant API as Go Backend (EC2)
+    participant Redis as Redis (Pub/Sub Backplane)
     participant DB as PostgreSQL (RDS)
     participant SQS as AWS SQS
-    participant S3 as AWS S3 / Cloudflare R2 (via CDN)
+    participant S3 as AWS S3 / Cloudflare R2
     participant Worker as Go Concurrent Workers
 
-    %% 1. Upload Initiation & Deduplication Check
-    Client->>API: POST /api/upload/initiate (filename, size, block hashes)
-    API->>DB: Check global blocks table for pre-existing hashes
-    DB-->>API: Return existing block IDs (deduplicated)
-    
-    %% 2. Presigned URLs
-    API->>Client: Return Session ID + Presigned PUT URLs for missing blocks only
-    
-    %% 3. Direct Storage Transfer
-    opt For Missing Blocks Only
-        Client->>S3: Direct HTTP PUT to CDN Edge (CloudFront/Cloudflare)
-        S3-->>Client: 200 OK (Block stored securely)
+    Client->>API: POST /api/upload/initiate (filename, block hashes, sizes)
+    API->>DB: Dedup check — blocks table (global SHA-256 index)
+    DB-->>API: Existing hashes (dedup hits skip upload)
+    Note over API: Small blocks (<=5 GiB): presigned PUT URL<br/>Large blocks (>5 GiB): MPU uploadID + part URLs
+    API-->>Client: Session ID + Upload URL(s) per missing block
+
+    opt Missing blocks only
+        Client->>CF: PUT /blocks/<sha256> (direct upload)
+        CF->>CF: Stream body → Web Crypto SHA-256 validation
+        CF->>S3: Forward if hash matches (reject 400 on mismatch)
+        S3-->>Client: 200 OK
     end
 
-    %% 4. Transactional Finalization
-    Client->>API: POST /api/upload/complete (session_id)
-    API->>API: Verify missing blocks physically exist in S3/R2
-    rect rgb(240, 240, 240)
-        Note over API, DB: Database Transaction
-        API->>DB: Write global blocks, write files metadata, link file_blocks, set owner permissions
-        DB-->>API: Commit Transaction
-    end
-    API-->>Client: 200 OK (Upload Complete)
+    Client->>API: POST /api/upload/complete (session_id, [etags for MPU])
+    API->>DB: Verify blocks present → atomic tx: blocks+files+permissions
+    DB-->>API: Commit
+    API->>SQS: Publish thumbnail job
+    API->>Redis: Publish WS event (fan-out to all pods)
+    API-->>Client: 200 OK
 
-    %% 5. Asynchronous Background Pipeline
-    API->>SQS: Publish "Upload Completed" event payload
-    loop Concurrent Long-Polling
-        Worker->>SQS: SQS ReceiveMessage (20s long-poll)
+    loop Concurrent SQS workers
+        Worker->>SQS: Long-poll (20s)
+        SQS-->>Worker: Job payload
+        Worker->>S3: Fetch blocks → generate thumbnail
+        Worker->>S3: PUT /thumbnails/{fileID}.png
     end
-    SQS-->>Worker: Dispatch file metadata payload
-    
-    %% 6. Thumbnailing
-    opt If File is Image
-        Worker->>S3: Download blocks
-        Worker->>Worker: Generate 200x200 PNG Thumbnail in-memory
-        Worker->>S3: PutObject to /thumbnails/{fileID}.png
-        Worker->>SQS: Delete SQS Message (Mark Job Success)
-    end
+
+    Redis-->>API: Fan-out to all connected nodes
+    API-->>Client: WebSocket push notification
 ```
 
 ---
 
-## 🚀 Key Engineering Features
+## Features
 
-### 1. Direct-to-Cloud Uploads via CDN Presigned URLs
-To protect the Go backend from network I/O and memory saturation, the server never streams file data. 
-* The Go backend generates short-lived, secure S3 presigned PUT URLs.
-* The client performs direct binary uploads via **AWS CloudFront** or **Cloudflare**, terminating SSL handshakes at the edge.
-* Data is routed to storage over the cloud provider’s high-speed private backbone, completely shielding the application server from data transfer loads.
+### 1. Direct-to-Cloud Uploads via Presigned URLs
 
-### 2. Global Block-Level Deduplication (Single-Instance Storage)
-Files are sliced into **4MB blocks** on the client side, and each block is fingerprinted using **SHA-256**. 
-* The backend maintains a unique index of block hashes.
-* If multiple users upload files containing identical blocks (e.g., standard document templates or shared assets), only one copy is physically stored in S3/R2.
-* Multiple user files are linked dynamically to the same physical blocks, dramatically lowering storage costs and client bandwidth.
+The Go backend never streams file data. It generates short-lived S3 presigned PUT URLs; the client uploads directly to the storage edge. This completely shields the application server from I/O load and memory pressure.
 
-### 3. Resumable Upload Session State Machine
-To handle flaky network connections gracefully:
-* Upload lifecycles are tracked via an `upload_sessions` and `session_blocks` state machine.
-* If a 500MB upload is interrupted, the client polls `GET /api/upload/session/{id}`.
-* The backend returns a list of blocks that have already landed securely in storage. The client skips those and resumes uploading exactly from the block where the connection failed.
+For files above 5 GiB, the server initiates an **S3 Multipart Upload** and returns N presigned part URLs. The client PUTs each part independently and passes the ETags back to `POST /api/upload/complete`, which calls `CompleteMultipartUpload`. There is no file size ceiling.
 
-### 4. Hierarchical Access Control (Permissions Sharing)
-Rather than simple object storage, this system implements collaborative file sharing.
-* A `permissions` table maps users and roles (`VIEWER`, `EDITOR`, `OWNER`) to files and folders.
-* Access verification utilizes **Recursive Common Table Expressions (CTEs)** in PostgreSQL. If a user tries to access a deeply nested file, the database efficiently walks up the folder tree to authorize permissions dynamically without expensive application-side processing.
+### 2. Global Block-Level Deduplication
 
-### 5. Event-Driven Background Worker Pool (SQS + Go Concurrency)
-Post-upload tasks (like image thumbnail generation) are fully decoupled.
-* Successful uploads trigger a message to **AWS SQS** using cost-efficient long-polling.
-* A concurrent pool of Go workers monitors the queue, fetches images, resizes them in-memory, and writes thumbnails back to the CDN.
-* The workers are wired with **graceful shutdown** listeners to ensure active jobs finish processing before the server shuts down.
+Files are sliced into 4 MB blocks client-side, each fingerprinted with SHA-256. The backend maintains a global block index — if any two users upload files sharing identical blocks, only one physical copy is stored. Resumable uploads are fully supported: `GET /api/upload/session/{id}` returns fresh upload URLs only for blocks not yet confirmed in storage.
+
+### 3. Real-Time Notifications with Redis Pub/Sub Backplane
+
+Every client tab connects over WebSocket. When an upload completes or a file is shared, `notifier.NotifyUser()` delivers the event to local connections and publishes to the Redis channel `blobcloud:ws:events`. Every API pod subscribes and fans the event to its own clients — horizontal scaling works with a single `REDIS_URL` env var. The server falls back to in-process Hub-only mode when Redis is not configured.
+
+### 4. Per-IP Per-Zone HTTP Rate Limiting
+
+Three independent zones applied in the chi router:
+
+| Zone | Default | Reason |
+|------|---------|--------|
+| `/api/auth/*` | 10 req/min | Credential stuffing / brute force |
+| `/api/upload/*` | 30 req/min | S3 presign calls are expensive |
+| `/api/*` (general) | 120 req/min | General DoS protection |
+
+In-memory token-bucket (`golang.org/x/time/rate`) by default; drop-in `RedisLimiter` (fixed-window Lua script) for multi-node. All 429 responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After` headers.
+
+### 5. Immutable Audit Log
+
+Every write action (`FILE_UPLOADED`, `FILE_SHARED`, `FILE_DELETED`) appends a row to the `audit_logs` table. The write is fire-and-forget — a background goroutine with its own 5-second context ensures the insert completes even after the HTTP response is sent, adding zero latency to the API. `GET /api/files/{id}/history` returns the paged audit trail for any file.
+
+### 6. Orphaned Block Garbage Collector
+
+The standalone `cmd/gc` binary compares live S3 object keys against the Postgres `blocks` table and deletes unreferenced objects. Runs safely with `--dry-run` by default. Designed to be scheduled as a nightly ECS task or Kubernetes CronJob.
+
+### 7. Prometheus Observability
+
+A private Prometheus registry is exposed at `GET /metrics`. Instrumented:
+- HTTP request latency histogram keyed by **route pattern** (bounded cardinality — not raw URL)
+- Block dedup hit/miss counters
+- Upload initiated/completed counters
+- SQS worker job duration histogram + error counter
+- WebSocket active-connections gauge
+
+### 8. Cloudflare Edge Integrity Validation
+
+`workers/edge_validator.js` intercepts every PUT to `/blocks/<sha256>`. It streams the request body through Web Crypto `SHA-256` and compares the digest against the hash in the URL. Mismatches are rejected with `400 Bad Request` before a single byte reaches R2. Applies to both single-PUT and multipart part uploads (same `/blocks/` key namespace).
+
+### 9. Hierarchical ACL with Recursive CTEs
+
+A `permissions` table maps `(user_id, file_id, role)`. Access checks on deeply nested files walk the folder tree using a PostgreSQL recursive CTE — the database does the traversal, not application code.
+
+### 10. Async Thumbnail Pipeline
+
+Successful uploads publish a job to AWS SQS. A pool of Go workers long-polls, fetches image blocks from S3, generates a 200×200 PNG in-memory, and writes `thumbnails/{fileID}.png` back to S3. Workers participate in graceful shutdown via `context.Context` cancellation.
 
 ---
 
-## 💻 Tech Stack
+## Tech Stack
 
-* **Backend:** Go (Golang), `go-chi` (Router), `pgx` (PostgreSQL Driver), AWS SDK for Go v2
-* **Frontend:** React, TailwindCSS, Axios
-* **Database:** PostgreSQL (Transactional metadata, indexing, and CTEs)
-* **Cloud Infrastructure:** AWS S3 / Cloudflare R2 (Object storage), AWS CloudFront (CDN), AWS SQS (Message Queue), AWS EC2 (Hosting)
+| Layer | Technology |
+|-------|-----------|
+| **Backend** | Go 1.22+, `go-chi/chi`, `pgx` / `database/sql` |
+| **Frontend** | React 18, TailwindCSS, Axios |
+| **Database** | PostgreSQL 16 |
+| **Object Storage** | AWS S3 / Cloudflare R2 |
+| **CDN / Edge** | AWS CloudFront or Cloudflare Workers |
+| **Message Queue** | AWS SQS |
+| **Real-time** | WebSocket (`gorilla/websocket`) + Redis Pub/Sub |
+| **Observability** | Prometheus (`prometheus/client_golang`) |
+| **Rate Limiting** | `golang.org/x/time/rate` + Redis fixed-window |
+| **Infrastructure** | AWS EC2 / ECS, Docker, GitHub Actions |
 
 ---
 
-## ⚙️ Local Setup & Running Guide
+## Repository Layout
+
+```
+Blob-Cloud/
+├── backend/
+│   ├── cmd/
+│   │   ├── api/main.go          # server entrypoint
+│   │   └── gc/main.go           # orphaned block GC binary
+│   ├── db/migrations/           # 9 SQL migrations (golang-migrate)
+│   └── internal/
+│       ├── audit/               # audit.Logger interface + NoopLogger
+│       ├── config/              # env-var Config struct
+│       ├── domain/              # StorageProvider + MultipartUploadProvider interfaces
+│       ├── gc/                  # GC algorithm + BlockLister/DBBlockHashes interfaces
+│       ├── metrics/             # Prometheus registry + HTTP middleware
+│       ├── queue/               # SQS publisher + worker pool
+│       ├── ratelimit/           # Limiter interface, InMemoryLimiter, RedisLimiter
+│       ├── repository/postgres/ # all DB repositories
+│       ├── service/             # UploadService (MPU-aware)
+│       ├── storage/             # LocalStore + S3Storage (implements MPU)
+│       ├── sync/                # Hub + RedisBackplane
+│       └── transport/http/      # chi router + all HTTP handlers
+└── workers/
+    ├── edge_validator.js        # Cloudflare Worker — SHA-256 edge validation
+    └── wrangler.toml            # deploy config
+```
+
+---
+
+## Local Setup
 
 ### Prerequisites
-* Go 1.21 or higher
-* Node.js 18 or higher
-* Docker (for running local PostgreSQL)
+- Go 1.22+
+- Node.js 18+
+- Docker
+- Redis (optional — single-node mode works without it)
 
 ### 1. Run the Database
-Spin up the local PostgreSQL database in Docker:
 ```bash
 docker run --name blobcloud-db \
   -e POSTGRES_USER=postgres \
@@ -129,57 +182,115 @@ docker run --name blobcloud-db \
   -d postgres:16-alpine
 ```
 
-### 2. Configure Backend Environment
-Create a `/backend/.env` file:
+### 2. Configure Backend
+
+Create `backend/.env`:
 ```env
 PORT=8080
 ENV=development
 LOCAL_STORAGE_DIR=./tmp/storage
 BASE_URL=http://localhost:8080
 
-# DB Config
 DB_DSN=postgres://postgres:postgres@localhost:5432/blobcloud?sslmode=disable
 
-# Storage config (Change to "s3" for AWS/R2 testing)
-STORAGE_PROVIDER=local 
+STORAGE_PROVIDER=local
 AWS_REGION=us-east-1
-AWS_S3_BUCKET=your-bucket-name
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_S3_BUCKET=your-bucket
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
 
-# SQS Queue config
 SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/your-account/your-queue
 SQS_NUM_WORKERS=3
 SQS_POLL_TIMEOUT_SEC=20
+
+REDIS_URL=redis://localhost:6379
+
+RL_AUTH_RPM=10
+RL_UPLOAD_RPM=30
+RL_API_RPM=120
+
+JWT_SECRET=change-me
 ```
 
 ### 3. Start the Backend
 ```bash
 cd backend
 go run cmd/api/main.go
+# Migrations run automatically on boot.
 ```
-*Your database migrations will run programmatically on boot using Go's standard `embed` library.*
 
-### 4. Start the Frontend
+### 4. Run the GC (dry-run by default)
+```bash
+cd backend
+go run cmd/gc/main.go --dry-run
+# Live run:
+go run cmd/gc/main.go --no-dry-run --min-age 24h
+```
+
+### 5. Start the Frontend
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
----
-
-## 📈 System Design Trade-offs & Scale Limits
-
-Designing a production-grade system means knowing where the limits of your architecture lie. During development, the following trade-offs were made:
-
-1. **Relational Database Bottleneck:** Choosing PostgreSQL allowed for fast recursive ACL calculations (via CTEs). However, under extreme write loads (billions of files), a single database will experience index locking. Scalability would require sharding the database by `user_id` or migrating to a distributed database like CockroachDB.
-2. **WebSocket Synchronization scaling:** WebSocket notifications are handled locally in-memory on the Go instance. If horizontally scaled across multiple EC2 instances behind a load balancer, instances would need to be bridged together using a **Redis Pub/Sub** backplane to synchronize notifications globally.
-3. **Orphaned Block Garbage Collection:** Because we only link files to blocks once the complete API call succeeds, aborted or abandoned uploads will leave unreferenced binary objects in S3/R2. In a commercial environment, a background garbage collection cron job must run daily to compare S3 keys against active Postgres block records and prune orphaned storage data.
+### 6. Deploy the Cloudflare Edge Worker
+```bash
+cd workers
+npm install -g wrangler
+wrangler deploy
+```
 
 ---
 
-## 📺 Demo & Deployment
+## Running Tests
 
-* 🔗 **Live URL:** *To be updated soon*
-* 🎥 **Walkthrough Video:** *To be updated soon*
+```bash
+cd backend
+
+# Full suite — no external services required
+go test ./... -count=1 -timeout 90s
+
+# Per-package
+go test ./internal/ratelimit/... -v   # 7 tests
+go test ./internal/sync/...     -v   # 4 tests
+go test ./internal/gc/...       -v   # 5 tests
+go test ./internal/audit/...    -v   # 5 tests
+go test ./internal/service/...  -v   # E2E upload + 6 MPU tests
+
+go build ./...
+```
+
+| Package | Status |
+|---------|--------|
+| `internal/audit` | ✅ |
+| `internal/auth` | ✅ |
+| `internal/gc` | ✅ |
+| `internal/queue` | ✅ |
+| `internal/ratelimit` | ✅ |
+| `internal/repository/postgres` | ✅ |
+| `internal/service` | ✅ |
+| `internal/storage` | ✅ |
+| `internal/sync` | ✅ |
+| `internal/transport/http` | ✅ |
+
+---
+
+## System Design Trade-offs
+
+| Concern | Current approach | Path forward |
+|---------|-----------------|-------------|
+| DB write throughput | Single PostgreSQL | Shard by `user_id`; CockroachDB for global distribution |
+| WebSocket horizontal scale | Redis Pub/Sub backplane | Already solved — point `REDIS_URL` at a Redis cluster |
+| File size ceiling | None (S3 MPU, up to ~10 TB per file) | Already solved |
+| Upload data integrity | SHA-256 validation at Cloudflare edge | Already solved |
+| Orphaned block storage cost | GC binary | Schedule as nightly ECS / CronJob |
+| Auth brute force | 10 req/min rate limit | Account lockout + CAPTCHA |
+| Audit retention | Immutable Postgres table | Archive to S3 Glacier for long-term compliance |
+
+---
+
+## Demo & Deployment
+
+- 🔗 **Live URL:** *Coming soon*
+- 🎥 **Walkthrough Video:** *Coming soon*
