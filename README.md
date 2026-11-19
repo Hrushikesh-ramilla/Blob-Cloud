@@ -1,5 +1,7 @@
 # Blob-Cloud
 
+**Live demo:** [Blob-Cloud — Secure File Storage](https://blobcloud.dev/login)
+
 Blob-Cloud is a browser-based file storage application with a Go API, PostgreSQL metadata, and local or S3-compatible object storage. The repository includes a React/TypeScript frontend, background file processing, sharing, and synchronization features.
 
 > **Project status:** core upload, sharing/ACL, sync, processing, and local-storage garbage-collection paths have been implemented and exercised with PostgreSQL-backed tests. This is a portfolio project, not a claim of production security certification. See the limitations below for the areas that remain unverified or incomplete.
